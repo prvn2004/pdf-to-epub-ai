@@ -3,6 +3,7 @@ import { store } from '../state.js';
 export class ReaderComponent {
   constructor() {
     this.bookPages = document.getElementById('bookPages');
+    this.maxPagenoSeen = 0;
     this.initEvents();
   }
 
@@ -13,6 +14,7 @@ export class ReaderComponent {
     });
 
     store.addEventListener('change:jobId', () => {
+      this.maxPagenoSeen = 0;
       this.bookPages.innerHTML = '<div class="empty-state">Processing started...</div>';
     });
   }
@@ -58,19 +60,37 @@ export class ReaderComponent {
   }
 
   addBookPage(pageno, text) {
-    // Clear empty state on first page
     const emptyState = this.bookPages.querySelector('.empty-state');
     if (emptyState) emptyState.remove();
 
-    let div = document.getElementById(`page-${pageno}`);
+    const numPageno = Number(pageno);
+
+    let div = document.getElementById(`page-${numPageno}`);
     if (!div) {
       div = document.createElement('div');
       div.className = 'book-page';
-      div.id = `page-${pageno}`;
-      this.bookPages.appendChild(div);
+      div.id = `page-${numPageno}`;
+      div.dataset.pageno = numPageno;
+
+      // Maintain strict numerical page order in the DOM
+      const existingPages = Array.from(this.bookPages.querySelectorAll('.book-page[data-pageno]'));
+      const nextSibling = existingPages.find(el => Number(el.dataset.pageno) > numPageno);
+
+      if (nextSibling) {
+        this.bookPages.insertBefore(div, nextSibling);
+      } else {
+        this.bookPages.appendChild(div);
+      }
+    } else {
+      div.dataset.pageno = numPageno;
     }
 
-    div.innerHTML = `<h2>Page ${pageno}</h2>` + this.mdToHtml(text);
-    div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    div.innerHTML = `<h2>Page ${numPageno}</h2>` + this.mdToHtml(text);
+
+    // Smoothly scroll to newly added page if it's the highest page seen so far
+    if (numPageno > this.maxPagenoSeen) {
+      this.maxPagenoSeen = numPageno;
+      div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }
 }
