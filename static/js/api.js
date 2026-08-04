@@ -16,6 +16,18 @@ export class ApiClient {
     return await resp.json();
   }
 
+  static async getSession(jobId) {
+    const resp = await fetch(`/api/session/${jobId}`);
+    if (!resp.ok) throw new Error(`Failed to fetch session: ${resp.statusText}`);
+    return await resp.json();
+  }
+
+  static async resumeJob(jobId) {
+    const resp = await fetch(`/api/resume/${jobId}`, { method: 'POST' });
+    if (!resp.ok) throw new Error(`Failed to resume job: ${resp.statusText}`);
+    return await resp.json();
+  }
+
   static getDownloadUrl(jobId) {
     return `/download/${jobId}`;
   }
