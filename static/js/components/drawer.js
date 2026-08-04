@@ -1,4 +1,6 @@
 import { store } from '../state.js';
+import { ApiClient } from '../api.js';
+import { sseManager } from '../sse.js';
 
 export class DrawerComponent {
   constructor() {
@@ -7,6 +9,9 @@ export class DrawerComponent {
     this.jobList = document.getElementById('jobList');
     this.jobCountBadge = document.getElementById('jobCountBadge');
     
+    this.drawerAddJobBtn = document.getElementById('drawerAddJobBtn');
+    this.drawerFileInput = document.getElementById('drawerFileInput');
+
     this.pollTimer = null;
     this.init();
   }
@@ -16,6 +21,18 @@ export class DrawerComponent {
       this.drawerToggleBtn.addEventListener('click', () => {
         this.jobDrawer.classList.toggle('open');
         this.fetchJobsList();
+      });
+    }
+
+    if (this.drawerAddJobBtn && this.drawerFileInput) {
+      this.drawerAddJobBtn.addEventListener('click', () => {
+        this.drawerFileInput.click();
+      });
+
+      this.drawerFileInput.addEventListener('change', async () => {
+        if (this.drawerFileInput.files.length) {
+          await this.handleSidebarUpload(Array.from(this.drawerFileInput.files));
+        }
       });
     }
 
@@ -30,6 +47,38 @@ export class DrawerComponent {
     });
 
     this.fetchJobsList();
+  }
+
+  async handleSidebarUpload(files) {
+    const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    if (!pdfFiles.length) return alert('Please select valid PDF file(s).');
+
+    try {
+      const data = await ApiClient.batchUpload(pdfFiles, '', '');
+      if (data.jobs && data.jobs.length > 0) {
+        const firstJob = data.jobs[0];
+        
+        // Hide dropzone, show workspace
+        const dz = document.getElementById('dropzone');
+        const ws = document.getElementById('workspace');
+        if (dz) dz.classList.add('hidden');
+        if (ws) ws.classList.add('active');
+
+        store.set('jobId', firstJob.job_id);
+
+        const info = await ApiClient.getPdfInfo(firstJob.job_id);
+        store.set('totalPages', info.pages);
+        store.set('currentPage', 0);
+        store.set('pages', {});
+
+        sseManager.listen(firstJob.job_id);
+        
+        this.startPolling();
+        this.fetchJobsList();
+      }
+    } catch (err) {
+      alert(`Error uploading file: ${err.message}`);
+    }
   }
 
   startPolling() {
