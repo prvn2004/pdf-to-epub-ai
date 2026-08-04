@@ -19,8 +19,10 @@ class Settings:
     )
     OPENCODE_MODEL: str = os.getenv("OPENCODE_MODEL", "qwen3.7-plus")
 
-    MAX_IMAGE_SIDE: int = 1568
+    # Vision input cap (longest side). 1280px is optimal for vision LLM speed + crisp OCR accuracy.
+    MAX_IMAGE_SIDE: int = 1280
     MAX_CROP_SIDE: int = 1200
+    JPEG_QUALITY: int = 72
 
     def init_directories(self):
         self.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)

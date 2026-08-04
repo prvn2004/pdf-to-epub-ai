@@ -2,6 +2,8 @@ import time
 import json
 import re
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import Tuple
 from app.clients.base import BaseVisionLLMClient
 from app.models.ocr import OCRResult, ImageBox
@@ -12,6 +14,16 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         self.api_key = api_key or settings.OPENCODE_API_KEY
         self.api_url = api_url or settings.OPENCODE_URL
         self.model = model or settings.OPENCODE_MODEL
+        
+        # High-performance HTTP Session with Connection Pooling (25 parallel sockets)
+        self.session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=25,
+            pool_maxsize=25,
+            max_retries=Retry(total=2, backoff_factor=0.5, status_forcelist=[502, 503, 504])
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def ocr_page(self, image_b64: str, page_size: Tuple[int, int], attempts: int = 3) -> OCRResult:
         if not self.api_key:
@@ -61,7 +73,7 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         last_err = None
         for attempt in range(attempts):
             try:
-                resp = requests.post(self.api_url, json=payload, headers=headers, timeout=180)
+                resp = self.session.post(self.api_url, json=payload, headers=headers, timeout=180)
                 if resp.status_code == 200:
                     data = resp.json()
                     try:
@@ -100,7 +112,7 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
                 last_err = f"API request failed: {e}"
 
             if attempt + 1 < attempts:
-                backoff = 2 ** attempt + 0.5 * attempt
+                backoff = 1.5 ** attempt
                 time.sleep(backoff)
 
         raise RuntimeError(last_err or "API: unknown failure")

@@ -1,6 +1,7 @@
 import os
 import time
 import re
+import fitz
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List
@@ -47,13 +48,30 @@ class PipelineService:
                 display_pages = [i + 1 for i in pages_to_process]
                 session_manager.emit_event(job_id, "progress", {
                     "phase": "ocr",
-                    "msg": f"Processing {len(pages_to_process)} uncompleted page(s): {display_pages[:5]}{'...' if len(display_pages) > 5 else ''} with {self.max_workers} workers..."
+                    "msg": f"Pre-rendering {len(pages_to_process)} pages for parallel OCR..."
+                })
+
+                # High-speed pre-rendering pass (avoids multi-threaded disk file locks)
+                t_prerender = time.time()
+                pre_rendered = {}
+                doc = fitz.open(pdf_path)
+                for i in pages_to_process:
+                    page = doc[i]
+                    pix = page.get_pixmap(dpi=200)
+                    img_b64, page_size, scale = self.pdf_service.encode_pixmap_for_ocr(pix)
+                    pre_rendered[i] = (img_b64, page_size, scale, pix)
+                doc.close()
+                prerender_sec = round(time.time() - t_prerender, 2)
+
+                session_manager.emit_event(job_id, "progress", {
+                    "phase": "ocr",
+                    "msg": f"Executing 10 parallel vision OCR requests ({len(pages_to_process)} pages remaining)..."
                 })
 
                 # Process all missing or uncompleted pages in parallel with 10 workers
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = {
-                        executor.submit(self._process_single_page, job_id, pdf_path, i, total): (i + 1)
+                        executor.submit(self._process_pre_rendered_page, job_id, i, total, pre_rendered[i], prerender_sec): (i + 1)
                         for i in pages_to_process
                     }
 
@@ -127,15 +145,13 @@ class PipelineService:
             session_manager.update_session(job_id, status="error", error=str(e))
             session_manager.emit_event(job_id, "error", {"msg": str(e)})
 
-    def _process_single_page(self, job_id: str, pdf_path: str, page_idx: int, total: int, max_attempts: int = 5) -> dict:
+    def _process_pre_rendered_page(
+        self, job_id: str, page_idx: int, total: int, render_tuple: tuple, render_time: float, max_attempts: int = 5
+    ) -> dict:
         pageno = page_idx + 1
+        img_b64, page_size, scale, pix = render_tuple
 
-        # 1. Render page
-        t_render = time.time()
-        img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
-        render_time = time.time() - t_render
-
-        # 2. OCR with Retry Loop
+        # Vision LLM OCR with Retry Loop over HTTP Connection Pool
         t0 = time.time()
         ocr_res = None
         last_exc = None
@@ -156,7 +172,7 @@ class PipelineService:
         image_coords = ocr_res.images
         elapsed = time.time() - t0
 
-        # 3. Crop images
+        # Crop images locally
         crops = []
         if image_coords:
             crops = ImageService.crop_images(job_id, pageno, pix, image_coords)
@@ -171,7 +187,7 @@ class PipelineService:
             "text": md,
             "images": len(image_coords),
             "crops": len(crops),
-            "render_sec": round(render_time, 2),
+            "render_sec": render_time,
             "time_sec": round(elapsed, 1),
             "cumulative_sec": round(elapsed, 1),
         }
