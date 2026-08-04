@@ -154,6 +154,7 @@ html[data-theme="dark"] header {
 
 .pane-right {
   background: var(--surface);
+  position: relative;
 }
 
 .pane-label {
@@ -165,20 +166,27 @@ html[data-theme="dark"] header {
   font-weight: 500;
 }
 
-/* PDF page preview */
+/* PDF page preview (Fitted vertically inside height) */
 .pdf-page {
   background: white;
   box-shadow: var(--shadow);
   border-radius: 2px;
   overflow: hidden;
   max-width: 100%;
+  max-height: calc(100vh - 180px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-bottom: 16px;
   transition: all var(--transition);
 }
 .pdf-page img {
   display: block;
-  width: 100%;
+  max-height: calc(100vh - 190px);
+  max-width: 100%;
+  width: auto;
   height: auto;
+  object-fit: contain;
 }
 .pdf-page.active {
   box-shadow: 0 0 0 2px var(--accent), 0 4px 16px rgba(0,113,227,0.15);
@@ -200,6 +208,38 @@ html[data-theme="dark"] header {
 }
 .page-nav button:hover { background: var(--accent-dim); border-color: var(--accent); }
 .page-nav span { font-size: 13px; color: var(--text-secondary); }
+
+/* Minimalist Horizontal Line Page Minimap */
+.page-minimap {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  z-index: 15;
+  padding: 8px 4px;
+  background: transparent;
+  pointer-events: auto;
+}
+.minimap-line {
+  height: 3px;
+  width: 10px;
+  background: var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.minimap-line:hover {
+  width: 18px;
+  background: var(--text-secondary);
+}
+.minimap-line.active {
+  width: 26px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(0, 113, 227, 0.4);
+}
 
 /* Book content (right pane) */
 .book-pages {

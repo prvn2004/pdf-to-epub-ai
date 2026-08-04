@@ -3,20 +3,36 @@ import { store } from '../state.js';
 export class ReaderComponent {
   constructor() {
     this.bookPages = document.getElementById('bookPages');
-    this.maxPagenoSeen = 0;
+    this.paneRight = document.getElementById('paneRight');
+    
+    this.minimap = null;
+    this.initMinimap();
     this.initEvents();
+  }
+
+  initMinimap() {
+    if (!this.paneRight) return;
+    this.minimap = document.createElement('div');
+    this.minimap.className = 'page-minimap';
+    this.paneRight.appendChild(this.minimap);
   }
 
   initEvents() {
     store.addEventListener('page:added', e => {
       const { pageno, text } = e.detail;
       this.addBookPage(pageno, text);
+      this.updateMinimap();
     });
 
     store.addEventListener('change:jobId', () => {
-      this.maxPagenoSeen = 0;
       this.bookPages.innerHTML = '<div class="empty-state">Processing started...</div>';
+      if (this.minimap) this.minimap.innerHTML = '';
     });
+
+    // Highlight active minimap line on scroll
+    if (this.paneRight) {
+      this.paneRight.addEventListener('scroll', () => this.highlightActiveMinimapLine());
+    }
   }
 
   mdToHtml(md) {
@@ -87,10 +103,52 @@ export class ReaderComponent {
 
     div.innerHTML = `<h2>Page ${numPageno}</h2>` + this.mdToHtml(text);
 
-    // Smoothly scroll to newly added page if it's the highest page seen so far
-    if (numPageno > this.maxPagenoSeen) {
-      this.maxPagenoSeen = numPageno;
-      div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    // NOTE: Removed forced scrollIntoView to allow users to read uninterrupted without jumping!
+  }
+
+  updateMinimap() {
+    if (!this.minimap) return;
+    const pages = Array.from(this.bookPages.querySelectorAll('.book-page[data-pageno]'));
+    this.minimap.innerHTML = '';
+
+    pages.forEach(pEl => {
+      const pageno = pEl.dataset.pageno;
+      const line = document.createElement('div');
+      line.className = 'minimap-line';
+      line.title = `Page ${pageno}`;
+      line.dataset.targetPage = pageno;
+
+      line.addEventListener('click', () => {
+        pEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+
+      this.minimap.appendChild(line);
+    });
+
+    this.highlightActiveMinimapLine();
+  }
+
+  highlightActiveMinimapLine() {
+    if (!this.minimap || !this.paneRight) return;
+    const lines = Array.from(this.minimap.querySelectorAll('.minimap-line'));
+    const pages = Array.from(this.bookPages.querySelectorAll('.book-page[data-pageno]'));
+    if (!pages.length || !lines.length) return;
+
+    const containerTop = this.paneRight.scrollTop;
+    let activeIndex = 0;
+
+    for (let i = 0; i < pages.length; i++) {
+      if (pages[i].offsetTop <= containerTop + 100) {
+        activeIndex = i;
+      }
     }
+
+    lines.forEach((line, idx) => {
+      if (idx === activeIndex) {
+        line.classList.add('active');
+      } else {
+        line.classList.remove('active');
+      }
+    });
   }
 }

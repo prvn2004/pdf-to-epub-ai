@@ -30,7 +30,6 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         if not self.api_key:
             raise RuntimeError("OPENCODE_API_KEY not set. Get one at https://opencode.ai/auth")
 
-        # Streamlined instruction prompt (~85 tokens vs ~215 tokens -> saves ~65k tokens per 500-page book)
         combined_prompt = (
             "Convert this PDF page image into clean Markdown. "
             "1. Structure: Use #/##/### headings, **bold**, *italic*, > quotes, lists, and tables matching page layout. "
@@ -55,7 +54,7 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
-            "max_tokens": 16384,
+            "max_tokens": 4096,  # Optimized for faster Vision LLM prefill and generation speed
         }
 
         headers = {

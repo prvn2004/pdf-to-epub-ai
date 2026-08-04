@@ -7,7 +7,7 @@ export class DrawerComponent {
     this.jobList = document.getElementById('jobList');
     this.jobCountBadge = document.getElementById('jobCountBadge');
     
-    this.jobsMap = new Map();
+    this.pollTimer = null;
     this.init();
   }
 
@@ -15,15 +15,33 @@ export class DrawerComponent {
     if (this.drawerToggleBtn && this.jobDrawer) {
       this.drawerToggleBtn.addEventListener('click', () => {
         this.jobDrawer.classList.toggle('open');
+        this.fetchJobsList();
       });
     }
 
-    store.addEventListener('change:jobId', e => {
+    store.addEventListener('change:jobId', () => {
       this.fetchJobsList();
+      this.startPolling();
     });
 
-    // Periodically sync job list status
-    setInterval(() => this.fetchJobsList(), 4000);
+    store.addEventListener('change:isCompleted', () => {
+      this.fetchJobsList();
+      this.stopPolling();
+    });
+
+    this.fetchJobsList();
+  }
+
+  startPolling() {
+    this.stopPolling();
+    this.pollTimer = setInterval(() => this.fetchJobsList(), 5000);
+  }
+
+  stopPolling() {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 
   async fetchJobsList() {
@@ -33,6 +51,11 @@ export class DrawerComponent {
         const data = await resp.json();
         if (data.jobs) {
           this.renderJobs(data.jobs);
+          // Check if any job is still actively processing
+          const hasActiveJobs = data.jobs.some(j => j.status === 'processing');
+          if (!hasActiveJobs) {
+            this.stopPolling();
+          }
         }
       }
     } catch (e) {
@@ -100,6 +123,7 @@ export class DrawerComponent {
         resumeBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           await fetch(`/api/resume/${job.job_id}`, { method: 'POST' });
+          this.startPolling();
           this.fetchJobsList();
         });
       }
@@ -128,8 +152,7 @@ export class DrawerComponent {
     store.set('jobId', jobId);
     store.set('currentPage', 0);
     store.set('pages', {});
-    
-    // Trigger reconnection
     window.location.hash = jobId;
+    window.location.reload();
   }
 }

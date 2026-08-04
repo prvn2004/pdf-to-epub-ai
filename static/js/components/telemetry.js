@@ -43,18 +43,19 @@ export class TelemetryComponent {
 
     store.addEventListener('change:latestPageDone', e => {
       const d = e.detail;
-      const pct = (d.pageno / d.total) * 100;
+      const pct = Math.round((d.pageno / d.total) * 100);
       this.progressBar.style.width = pct + '%';
-      this.progressText.textContent = `Page ${d.pageno} of ${d.total} — ${d.time_sec}s`;
+      
+      this.progressText.textContent = `Page ${d.pageno} of ${d.total} (${pct}%) — ⚡ Download partial files anytime!`;
 
       this.statPage.textContent = d.pageno;
       this.statTime.textContent = Math.round(d.cumulative_sec) + 's';
 
-      this.telPages.textContent = `${d.pageno} / ${d.total}`;
+      this.telPages.textContent = `${d.pageno} / ${d.total} (${pct}%)`;
       this.telOcr.textContent = d.cumulative_sec.toFixed(0) + 's';
       this.telAvg.textContent = (d.cumulative_sec / d.pageno).toFixed(1) + 's';
 
-      // Show download bar as soon as first page completes (allowing partial downloads)
+      // Show download bar as soon as first page completes
       if (this.downloadBar) {
         this.downloadBar.style.display = 'flex';
       }
@@ -66,7 +67,7 @@ export class TelemetryComponent {
 
     store.addEventListener('change:isCompleted', () => {
       this.progressBar.style.width = '100%';
-      this.progressText.textContent = '✅ Complete!';
+      this.progressText.textContent = '✅ 100% Complete — Files ready for download!';
       if (this.downloadBar) {
         this.downloadBar.style.display = 'flex';
       }
