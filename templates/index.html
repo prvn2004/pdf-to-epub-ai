@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Folio — PDF to Markdown</title>
+
+<!-- Modular Stylesheets -->
+<link rel="stylesheet" href="/static/css/variables.css">
+<link rel="stylesheet" href="/static/css/base.css">
+<link rel="stylesheet" href="/static/css/components.css">
+
+<!-- Entry Javascript Module -->
+<script type="module" src="/static/js/main.js" defer></script>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">📖 Folio <span>PDF → Markdown</span></div>
+  <div class="stats" id="headerStats" style="display:none">
+    <span>Page <span class="val" id="statPage">—</span> / <span class="val" id="statTotal">—</span></span>
+    <span><span class="val" id="statTime">0s</span> elapsed</span>
+  </div>
+</header>
+
+<!-- UPLOAD ZONE -->
+<div class="dropzone" id="dropzone">
+  <div class="icon">📄</div>
+  <h2>Drop a PDF here</h2>
+  <p>or click to browse — we'll convert it to Markdown in real-time</p>
+  <div class="meta-row">
+    <input type="text" id="metaTitle" placeholder="Book title (optional)">
+    <input type="text" id="metaAuthor" placeholder="Author (optional)">
+  </div>
+  <input type="file" id="fileInput" accept=".pdf" hidden>
+</div>
+
+<!-- WORKSPACE -->
+<div class="workspace" id="workspace">
+  <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+  <div class="progress-text" id="progressText">Ready</div>
+
+  <div class="panes">
+    <!-- LEFT: PDF preview -->
+    <div class="pane pane-left" id="paneLeft">
+      <div class="pane-label">📄 Original PDF</div>
+      <div class="pdf-page" id="pdfPreview">
+        <img src="" alt="PDF page" id="pdfImage">
+      </div>
+      <div class="page-nav">
+        <button id="btnPrev">← Prev</button>
+        <span id="pageIndicator">Page 1</span>
+        <button id="btnNext">Next →</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: Live book content -->
+    <div class="pane pane-right" id="paneRight">
+      <div class="pane-label">📖 Live Preview</div>
+      <div class="book-pages" id="bookPages">
+        <div class="empty-state">
+          Processing will begin shortly...<br>
+          Each page appears here as it's converted.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TELEMETRY -->
+<div class="telemetry" id="telemetry" style="display:none">
+  <div class="row"><span class="label">Pages done</span><span class="value" id="telPages">0</span></div>
+  <div class="row"><span class="label">OCR time</span><span class="value" id="telOcr">—</span></div>
+  <div class="row"><span class="label">Avg / page</span><span class="value" id="telAvg">—</span></div>
+  <div class="row"><span class="label">Total</span><span class="value" id="telTotal">—</span></div>
+</div>
+
+<!-- DOWNLOAD BUTTON -->
+<button class="download-btn" id="downloadBtn">⬇ Download Markdown</button>
+
+</body>
+</html>
