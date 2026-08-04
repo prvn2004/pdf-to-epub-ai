@@ -3,10 +3,12 @@ import { store } from './state.js';
 export class SSEManager {
   constructor() {
     this.evtSource = null;
+    this.reconnectTimer = null;
   }
 
   listen(jobId) {
     if (this.evtSource) this.close();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 
     this.evtSource = new EventSource(`/api/stream/${jobId}`);
 
@@ -42,13 +44,24 @@ export class SSEManager {
     });
 
     this.evtSource.addEventListener('error', e => {
+      let isFinalError = false;
       try {
         const d = JSON.parse(e.data);
-        store.set('progressMsg', '❌ ' + (d.msg || 'Unknown error'));
+        store.set('progressMsg', '⚠️ ' + (d.msg || 'Processing issue'));
+        isFinalError = true;
       } catch (ex) {
-        store.set('progressMsg', '❌ Connection issue — retrying...');
+        store.set('progressMsg', '🔄 Connection drop — reconnecting stream...');
       }
+
       this.close();
+
+      if (!isFinalError && store.get('isProcessing') && !store.get('isCompleted')) {
+        this.reconnectTimer = setTimeout(() => {
+          if (store.get('isProcessing') && !store.get('isCompleted')) {
+            this.listen(jobId);
+          }
+        }, 2000);
+      }
     });
 
     this.evtSource.onerror = () => {
@@ -62,6 +75,10 @@ export class SSEManager {
     if (this.evtSource) {
       this.evtSource.close();
       this.evtSource = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
   }
 }

@@ -26,30 +26,31 @@ class PipelineService:
         try:
             info = self.pdf_service.get_info(pdf_path)
             total = info["pages"]
-            session_manager.update_session(job_id, pages_total=total)
+            session_manager.update_session(job_id, pages_total=total, status="processing")
             session_manager.emit_event(job_id, "progress", {
                 "phase": "opening",
                 "msg": f"PDF: {total} pages | Concurrency: {self.max_workers} workers"
             })
 
-            # Check cached pages on disk for resumability
-            cached_pages = session_manager.load_cached_pages(job_id)
-            pages_to_process = [i for i in range(total) if (i + 1) not in cached_pages]
+            # Check valid cached pages on disk (filter out failed or missing pages)
+            valid_cached = session_manager.get_valid_cached_pages(job_id)
+            pages_to_process = [i for i in range(total) if (i + 1) not in valid_cached]
 
-            # Re-emit cached page_done events for UI sync
-            for pageno in sorted(cached_pages.keys()):
-                p_data = cached_pages[pageno]
+            # Re-emit valid page_done events for UI synchronization
+            for pageno in sorted(valid_cached.keys()):
+                p_data = valid_cached[pageno]
                 session_manager.emit_event(job_id, "page_done", p_data)
 
-            ocr_times = [p.get("time_sec", 0.0) for p in cached_pages.values()]
+            ocr_times = [p.get("time_sec", 0.0) for p in valid_cached.values()]
 
             if pages_to_process:
+                display_pages = [i + 1 for i in pages_to_process]
                 session_manager.emit_event(job_id, "progress", {
                     "phase": "ocr",
-                    "msg": f"Processing {len(pages_to_process)} remaining pages with {self.max_workers} parallel workers..."
+                    "msg": f"Processing {len(pages_to_process)} uncompleted page(s): {display_pages[:5]}{'...' if len(display_pages) > 5 else ''} with {self.max_workers} workers..."
                 })
 
-                # Process pages in parallel using ThreadPoolExecutor(max_workers=10)
+                # Process all missing or uncompleted pages in parallel with 10 workers
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = {
                         executor.submit(self._process_single_page, job_id, pdf_path, i, total): (i + 1)
@@ -60,7 +61,7 @@ class PipelineService:
                         pageno = futures[future]
                         try:
                             res = future.result()
-                            cached_pages[pageno] = res
+                            valid_cached[pageno] = res
                             ocr_times.append(res.get("time_sec", 0.0))
                             telemetry["image_count"] += res.get("crops", 0)
                             telemetry["page_times"].append({
@@ -71,20 +72,20 @@ class PipelineService:
                             })
                         except Exception as exc:
                             print(f"[pipeline error] Page {pageno} failed after retries: {exc}")
-                            # Fallback dummy block so page is never missing
-                            err_data = {
-                                "pageno": pageno,
-                                "total": total,
-                                "text": f"[Page {pageno} — OCR failed after retries: {exc}]",
-                                "images": 0,
-                                "crops": 0,
-                                "render_sec": 0.0,
-                                "time_sec": 0.0,
-                                "cumulative_sec": round(sum(ocr_times), 1),
-                            }
-                            session_manager.save_page_result(job_id, pageno, err_data)
-                            session_manager.emit_event(job_id, "page_done", err_data)
-                            cached_pages[pageno] = err_data
+
+            # Check for any remaining missing pages in 1..total range
+            still_missing = [p for p in range(1, total + 1) if p not in valid_cached]
+
+            if still_missing:
+                session_manager.update_session(
+                    job_id,
+                    status="incomplete",
+                    error=f"Processing incomplete — {len(still_missing)} page(s) (e.g. Page {still_missing[:3]}) failed. Retry/Resume available."
+                )
+                session_manager.emit_event(job_id, "error", {
+                    "msg": f"⚠️ Incomplete: {len(still_missing)} page(s) missing or failed (Pages: {still_missing}). Resume session to retry them."
+                })
+                return
 
             # Finalize Markdown in strict numerical page order 1..N
             session_manager.emit_event(job_id, "progress", {"phase": "markdown", "msg": "Finalizing Markdown..."})
@@ -92,7 +93,7 @@ class PipelineService:
 
             sorted_md_parts = []
             for pageno in range(1, total + 1):
-                p_info = cached_pages.get(pageno, {})
+                p_info = valid_cached.get(pageno, {})
                 text = p_info.get("text", f"[Page {pageno} — Content Missing]")
                 sorted_md_parts.append(f"## Page {pageno}\n\n{text.strip()}")
 

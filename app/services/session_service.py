@@ -30,7 +30,6 @@ class SessionService:
     def get_session(self, job_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             if job_id not in self._sessions:
-                # Try to load session from disk
                 loaded = self._load_session_from_disk(job_id)
                 if loaded:
                     self._sessions[job_id] = loaded
@@ -56,7 +55,6 @@ class SessionService:
                 sess["completed_pages"][pageno] = page_data
                 sess["pages_done"] = len(sess["completed_pages"])
 
-        # Write page result to disk
         pages_dir = settings.OUTPUTS_DIR / job_id / "pages"
         pages_dir.mkdir(parents=True, exist_ok=True)
         page_file = pages_dir / f"page_{pageno}.json"
@@ -79,6 +77,54 @@ class SessionService:
             except Exception:
                 pass
         return cached
+
+    def is_valid_page(self, page_data: dict) -> bool:
+        """Check if a page result is a valid successful OCR page (not failed/stub)."""
+        if not page_data or not isinstance(page_data, dict):
+            return False
+        text = page_data.get("text", "")
+        if not text or "OCR failed" in text or "Content Missing" in text:
+            return False
+        return True
+
+    def get_valid_cached_pages(self, job_id: str) -> Dict[int, dict]:
+        all_cached = self.load_cached_pages(job_id)
+        valid = {}
+        for pageno, data in all_cached.items():
+            if self.is_valid_page(data):
+                valid[pageno] = data
+        return valid
+
+    def populate_queue_from_history(self, job_id: str):
+        """Populate event queue with all historical page_done and status events if queue is empty."""
+        with self._lock:
+            sess = self._sessions.get(job_id)
+            if not sess:
+                return
+
+            if not sess.get("queue"):
+                queue = []
+                cached = self.get_valid_cached_pages(job_id)
+                sorted_pages = sorted(cached.keys())
+
+                for pageno in sorted_pages:
+                    queue.append({"event": "page_done", "data": cached[pageno]})
+
+                status = sess.get("status")
+                if status == "done":
+                    out_dir = settings.OUTPUTS_DIR / job_id
+                    mds = list(out_dir.glob("*.md")) if out_dir.exists() else []
+                    md_path = f"/download/{job_id}" if mds else ""
+                    queue.append({"event": "done", "data": {
+                        "md_path": md_path,
+                        "telemetry": sess.get("telemetry", {}),
+                    }})
+                elif status in ("error", "incomplete"):
+                    queue.append({"event": "error", "data": {
+                        "msg": sess.get("error") or "Processing incomplete — some pages require retry."
+                    }})
+
+                sess["queue"] = queue
 
     def _persist_session_meta(self, job_id: str):
         sess = self._sessions.get(job_id)
@@ -106,12 +152,25 @@ class SessionService:
             return None
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            cached_pages = self.load_cached_pages(job_id)
-            meta["completed_pages"] = cached_pages
-            meta["pages_done"] = len(cached_pages)
+            valid_pages = self.get_valid_cached_pages(job_id)
+            meta["completed_pages"] = valid_pages
+            meta["pages_done"] = len(valid_pages)
             meta["queue"] = []
+            
+            # Pre-populate event queue with page_done history
+            sorted_pages = sorted(valid_pages.keys())
+            for pageno in sorted_pages:
+                meta["queue"].append({"event": "page_done", "data": valid_pages[pageno]})
+            
+            if meta.get("status") == "done":
+                meta["queue"].append({"event": "done", "data": {
+                    "md_path": f"/download/{job_id}",
+                    "telemetry": meta.get("telemetry", {}),
+                }})
+
             return meta
-        except Exception:
+        except Exception as e:
+            print(f"[SessionService] Error loading session {job_id}: {e}")
             return None
 
 session_manager = SessionService()

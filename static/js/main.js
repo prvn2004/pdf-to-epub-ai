@@ -32,13 +32,16 @@ document.addEventListener('DOMContentLoaded', async () => {
           store.restorePages(sess.completed_pages);
         }
 
-        if (sess.status === 'done') {
+        const missing = sess.missing_pages || [];
+        if (sess.status === 'done' && missing.length === 0) {
           store.set('isCompleted', true);
           store.set('progressMsg', '✅ Completed (Restored from Session)');
         } else {
           store.set('isProcessing', true);
-          store.set('progressMsg', 'Resuming processing stream...');
-          // Trigger resume on backend if not processing
+          store.set('progressMsg', missing.length > 0
+            ? `Resuming processing for ${missing.length} uncompleted page(s)...`
+            : 'Resuming processing stream...'
+          );
           await ApiClient.resumeJob(savedJobId);
           sseManager.listen(savedJobId);
         }
