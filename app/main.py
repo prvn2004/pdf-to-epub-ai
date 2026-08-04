@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config import settings
 
@@ -11,6 +12,9 @@ from app.api.routes.assets import router as assets_router
 from app.api.routes.session import router as session_router
 
 app = FastAPI(title="Folio — PDF to Markdown & EPUB")
+
+# GZip compression middleware (compresses text/JSON payloads > 1000 bytes)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,

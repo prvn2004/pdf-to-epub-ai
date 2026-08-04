@@ -23,6 +23,12 @@ class Settings:
     MAX_IMAGE_SIDE: int = 1280
     MAX_CROP_SIDE: int = 1200
     JPEG_QUALITY: int = 72
+    WEBP_QUALITY: int = 75
+    IMAGE_FORMAT: str = os.getenv("IMAGE_FORMAT", "WEBP")
+    
+    # Concurrency & Disk Settings
+    MAX_CONCURRENT_WORKERS: int = int(os.getenv("MAX_CONCURRENT_WORKERS", "10"))
+    CLEANUP_UPLOAD_ON_COMPLETE: bool = os.getenv("CLEANUP_UPLOAD_ON_COMPLETE", "true").lower() == "true"
 
     def init_directories(self):
         self.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)

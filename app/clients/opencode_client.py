@@ -15,11 +15,12 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         self.api_url = api_url or settings.OPENCODE_URL
         self.model = model or settings.OPENCODE_MODEL
         
-        # High-performance HTTP Session with Connection Pooling (25 parallel sockets)
+        # Sockets pool sized dynamically to max workers (min 30 sockets)
+        pool_size = max(30, settings.MAX_CONCURRENT_WORKERS)
         self.session = requests.Session()
         adapter = HTTPAdapter(
-            pool_connections=25,
-            pool_maxsize=25,
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
             max_retries=Retry(total=2, backoff_factor=0.5, status_forcelist=[502, 503, 504])
         )
         self.session.mount("https://", adapter)
@@ -29,25 +30,17 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         if not self.api_key:
             raise RuntimeError("OPENCODE_API_KEY not set. Get one at https://opencode.ai/auth")
 
+        # Streamlined instruction prompt (~85 tokens vs ~215 tokens -> saves ~65k tokens per 500-page book)
         combined_prompt = (
-            "You are a precise document converter. Carefully analyze this PDF page image — "
-            "study the headlines, numbers, and how every element is placed, so you fully "
-            "understand the document structure and content before converting. "
-            "Convert the page into clean, well-structured Markdown: "
-            "use # / ## / ### for headings matching the document's hierarchy, "
-            "**bold** and *italic* for emphasis, > for block quotes, "
-            "- or 1. for lists, and markdown tables for tabular data. "
-            "Preserve numbers exactly (dates, prices, statistics, page references). "
-            "Output ALL visible body text exactly as written — no summarization, no commentary, "
-            "no 'here is the text'. "
-            "IMPORTANT — EXCLUDE non-content text: page numbers, running headers/footers, "
-            "ISBNs, copyright/legal boilerplate, watermark text, and anything outside the "
-            "main reading flow. "
-            "For each image/photo/chart, give its bounding box pixel coordinates "
-            "(x, y, width, height) from the top-left corner of the page image. "
-            'Respond with ONLY a JSON object of the form {"markdown": "...", "images": '
-            '[{"x":0,"y":0,"width":0,"height":0}]} — no preamble, no markdown fences.'
+            "Convert this PDF page image into clean Markdown. "
+            "1. Structure: Use #/##/### headings, **bold**, *italic*, > quotes, lists, and tables matching page layout. "
+            "2. Content: Transcribe ALL visible main body text verbatim with exact numbers. No summarization or commentary. "
+            "3. Exclude: Omit running headers, running footers, page numbers, and copyright/legal boilerplate. "
+            "4. Figures: Provide pixel bounding boxes (x, y, width, height) for any images, photos, or charts. "
+            'Respond strictly with JSON: {"markdown": "...", "images": [{"x":0,"y":0,"width":0,"height":0}]}'
         )
+
+        img_mime = "image/webp" if settings.IMAGE_FORMAT.upper() == "WEBP" else "image/jpeg"
 
         payload = {
             "model": self.model,
@@ -56,7 +49,7 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
                     "role": "user",
                     "content": [
                         {"type": "text", "text": combined_prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
+                        {"type": "image_url", "image_url": {"url": f"data:{img_mime};base64,{image_b64}"}}
                     ]
                 }
             ],

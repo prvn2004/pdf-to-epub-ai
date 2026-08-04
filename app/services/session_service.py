@@ -58,7 +58,9 @@ class SessionService:
         pages_dir = settings.OUTPUTS_DIR / job_id / "pages"
         pages_dir.mkdir(parents=True, exist_ok=True)
         page_file = pages_dir / f"page_{pageno}.json"
-        page_file.write_text(json.dumps(page_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        
+        # Compact JSON serialization (no indent whitespace)
+        page_file.write_text(json.dumps(page_data, ensure_ascii=False, separators=(',', ':')), encoding="utf-8")
         
         self._persist_session_meta(job_id)
 
@@ -144,7 +146,7 @@ class SessionService:
             "md_path": sess.get("md_path"),
             "error": sess.get("error"),
         }
-        meta_file.write_text(json.dumps(copy_data, indent=2), encoding="utf-8")
+        meta_file.write_text(json.dumps(copy_data, separators=(',', ':')), encoding="utf-8")
 
     def _load_session_from_disk(self, job_id: str) -> Optional[Dict[str, Any]]:
         meta_file = settings.OUTPUTS_DIR / job_id / "session.json"
@@ -157,7 +159,6 @@ class SessionService:
             meta["pages_done"] = len(valid_pages)
             meta["queue"] = []
             
-            # Pre-populate event queue with page_done history
             sorted_pages = sorted(valid_pages.keys())
             for pageno in sorted_pages:
                 meta["queue"].append({"event": "page_done", "data": valid_pages[pageno]})
