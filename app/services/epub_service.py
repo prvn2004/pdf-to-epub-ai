@@ -5,7 +5,7 @@ import shutil
 import zipfile
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from app.config import settings
 from app.services.session_service import session_manager
 
@@ -13,7 +13,7 @@ class EPUBService:
     def generate_epub(self, job_id: str, partial: bool = False) -> Path:
         """
         Generate an EPUB eBook from completed page markdowns and image crops for job_id.
-        Supports full and partial eBook generation.
+        Supports full and partial eBook generation with embedded figure images.
         """
         out_dir = settings.OUTPUTS_DIR / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -58,7 +58,10 @@ class EPUBService:
     def _compile_with_pandoc(self, job_id: str, full_md: str, epub_path: Path, title: str, author: str) -> Path:
         out_dir = settings.OUTPUTS_DIR / job_id
         temp_md = out_dir / "temp_epub_input.md"
-        temp_md.write_text(full_md, encoding="utf-8")
+        
+        # Transform leading /crops/{job_id}/ image paths to relative crops/{job_id}/ for Pandoc filesystem lookup
+        pandoc_md = re.sub(rf'!\[([^\]]*)\]\(/crops/{job_id}/([^)]+)\)', rf'![\1](crops/{job_id}/\2)', full_md)
+        temp_md.write_text(pandoc_md, encoding="utf-8")
 
         cmd = [
             "pandoc",
@@ -79,11 +82,11 @@ class EPUBService:
         raise RuntimeError(f"Pandoc error ({res.returncode}): {res.stderr}")
 
     def _compile_with_python(self, job_id: str, valid_pages: dict, sorted_pagenos: list, epub_path: Path, title: str, author: str) -> Path:
-        """Pure Python EPUB v3 Packager using zipfile."""
+        """Pure Python EPUB v3 Packager with full embedded image asset support."""
         buf = io.BytesIO()
 
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # 1. mimetype (MUST be uncompressed as per EPUB spec)
+            # 1. mimetype (MUST be uncompressed per EPUB spec)
             zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
 
             # 2. META-INF/container.xml
@@ -101,29 +104,41 @@ h1 { font-family: sans-serif; font-size: 1.8em; margin-bottom: 0.5em; text-align
 h2 { font-family: sans-serif; font-size: 1.3em; margin-top: 1.5em; border-bottom: 1px solid #ccc; color: #555; }
 p { margin-bottom: 1em; text-indent: 1em; }
 figure { margin: 1.5em 0; text-align: center; }
-figure img { max-width: 100%; height: auto; }
+figure img { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
 figcaption { font-size: 0.85em; color: #666; margin-top: 0.4em; }"""
             zf.writestr("EPUB/stylesheet.css", css)
 
             manifest_items = []
             spine_items = []
             nav_items = []
+            embedded_image_files = set()
 
-            # 4. Process each page into XHTML
+            # 4. Process each page into XHTML and extract embedded images
             crops_dir = settings.CROPS_DIR / job_id
             for pageno in sorted_pagenos:
                 p_data = valid_pages[pageno]
                 text = p_data.get("text", "")
-                xhtml_body = self._markdown_to_xhtml(text)
+                
+                xhtml_body, page_images = self._markdown_to_xhtml(text)
 
-                # Find any image crops on this page and embed them in zip
-                page_crops = list(crops_dir.glob(f"page{pageno}_img*.jpg"))
-                for crop_path in page_crops:
-                    arc_path = f"EPUB/crops/{crop_path.name}"
-                    zf.write(crop_path, arc_path)
-                    manifest_items.append(
-                        f'<item id="img_{crop_path.stem}" href="crops/{crop_path.name}" media-type="image/jpeg"/>'
-                    )
+                # Embed images referenced on this page into EPUB zip archive
+                for img_info in page_images:
+                    fname = img_info["filename"]
+                    if fname not in embedded_image_files:
+                        embedded_image_files.add(fname)
+                        crop_file = crops_dir / fname
+                        if crop_file.exists():
+                            arc_path = f"EPUB/crops/{fname}"
+                            zf.write(crop_file, arc_path)
+                            
+                            mime_type = "image/png" if fname.lower().endswith(".png") else "image/jpeg"
+                            if fname.lower().endswith(".webp"):
+                                mime_type = "image/webp"
+                            
+                            safe_id = re.sub(r'[^a-zA-Z0-9_]', '_', fname)
+                            manifest_items.append(
+                                f'<item id="img_{safe_id}" href="crops/{fname}" media-type="{mime_type}"/>'
+                            )
 
                 page_filename = f"page_{pageno}.xhtml"
                 xhtml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -190,13 +205,31 @@ figcaption { font-size: 0.85em; color: #666; margin-top: 0.4em; }"""
         epub_path.write_bytes(buf.getvalue())
         return epub_path
 
-    def _markdown_to_xhtml(self, md: str) -> str:
-        """Convert page Markdown to clean XHTML for EPUB."""
+    def _markdown_to_xhtml(self, md: str) -> Tuple[str, List[Dict[str, str]]]:
+        """Convert page Markdown to clean XHTML for EPUB and extract embedded image references."""
         if not md:
-            return "<p><em>(Empty Page)</em></p>"
+            return "<p><em>(Empty Page)</em></p>", []
         
+        extracted_images = []
+        
+        # 1. Escape HTML entities
         h = md.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        h = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'<figure><img src="\2" alt="\1"/><figcaption>\1</figcaption></figure>', h)
+
+        # 2. Extract & transform markdown image references: ![alt](src) -> <figure><img src="crops/filename.ext"/></figure>
+        def img_replacer(match):
+            caption = match.group(1)
+            src = match.group(2)
+            fname = Path(src).name
+            extracted_images.append({
+                "filename": fname,
+                "original_src": src
+            })
+            epub_img_src = f"crops/{fname}"
+            return f'<figure><img src="{epub_img_src}" alt="{caption}"/><figcaption>{caption}</figcaption></figure>'
+
+        h = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', img_replacer, h)
+
+        # 3. Block formatting
         h = re.sub(r'```([\s\S]*?)```', r'<pre><code>\1</code></pre>', h)
         h = re.sub(r'^###### (.*)$', r'<h6>\1</h6>', h, flags=re.M)
         h = re.sub(r'^##### (.*)$', r'<h5>\1</h5>', h, flags=re.M)
@@ -206,7 +239,7 @@ figcaption { font-size: 0.85em; color: #666; margin-top: 0.4em; }"""
         h = re.sub(r'^# (.*)$', r'<h1>\1</h1>', h, flags=re.M)
         h = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', h)
         h = re.sub(r'\*([^*\n]+)\*', r'<em>\1</em>', h)
-        
+
         paragraphs = []
         for block in re.split(r'\n{2,}', h):
             b = block.strip()
@@ -216,5 +249,5 @@ figcaption { font-size: 0.85em; color: #666; margin-top: 0.4em; }"""
                 paragraphs.append(b)
             else:
                 paragraphs.append(f"<p>{b.replace('\n', '<br/>')}</p>")
-        
-        return "\n".join(paragraphs)
+
+        return "\n".join(paragraphs), extracted_images
