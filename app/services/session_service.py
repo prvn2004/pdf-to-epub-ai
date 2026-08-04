@@ -1,4 +1,5 @@
 import json
+import shutil
 import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -9,17 +10,21 @@ class SessionService:
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def create_session(self, job_id: str) -> Dict[str, Any]:
+    def create_session(self, job_id: str, client_id: str = None, title: str = "Book", author: str = "Unknown") -> Dict[str, Any]:
         with self._lock:
             queue: List[Dict[str, Any]] = []
             session_data = {
                 "job_id": job_id,
+                "client_id": client_id,
+                "title": title,
+                "author": author,
                 "status": "processing",
+                "is_paused": False,
                 "pages_total": 0,
                 "pages_done": 0,
                 "completed_pages": {},  # pageno -> page_dict
                 "queue": queue,
-                "telemetry": {},
+                "telemetry": {"title": title, "author": author},
                 "md_path": None,
                 "error": None,
             }
@@ -34,6 +39,52 @@ class SessionService:
                 if loaded:
                     self._sessions[job_id] = loaded
             return self._sessions.get(job_id)
+
+    def get_client_sessions(self, client_id: str) -> List[Dict[str, Any]]:
+        """Scan disk outputs and return all jobs belonging to client_id."""
+        jobs = []
+        if not settings.OUTPUTS_DIR.exists():
+            return jobs
+
+        for meta_dir in settings.OUTPUTS_DIR.iterdir():
+            if meta_dir.is_dir():
+                job_id = meta_dir.name
+                sess = self.get_session(job_id)
+                if sess and (not client_id or sess.get("client_id") == client_id or not sess.get("client_id")):
+                    valid_pages = self.get_valid_cached_pages(job_id)
+                    jobs.append({
+                        "job_id": job_id,
+                        "title": sess.get("title") or sess.get("telemetry", {}).get("title") or "Book",
+                        "author": sess.get("author") or "Unknown",
+                        "status": sess.get("status", "unknown"),
+                        "pages_total": sess.get("pages_total", 0),
+                        "pages_done": len(valid_pages),
+                        "error": sess.get("error"),
+                    })
+        return sorted(jobs, key=lambda x: x["job_id"], reverse=True)
+
+    def pause_session(self, job_id: str) -> bool:
+        with self._lock:
+            sess = self._sessions.get(job_id)
+            if sess:
+                sess["status"] = "paused"
+                sess["is_paused"] = True
+                self._persist_session_meta(job_id)
+                self.emit_event(job_id, "progress", {"phase": "paused", "msg": "⏸️ Job paused by user"})
+                return True
+        return False
+
+    def delete_session(self, job_id: str) -> bool:
+        """Purge session data, outputs, crops, and upload files from server disk."""
+        with self._lock:
+            if job_id in self._sessions:
+                del self._sessions[job_id]
+
+        # Purge files
+        (settings.UPLOADS_DIR / f"{job_id}.pdf").unlink(missing_ok=True)
+        shutil.rmtree(settings.OUTPUTS_DIR / job_id, ignore_errors=True)
+        shutil.rmtree(settings.CROPS_DIR / job_id, ignore_errors=True)
+        return True
 
     def emit_event(self, job_id: str, event: str, data: dict):
         with self._lock:
@@ -58,8 +109,6 @@ class SessionService:
         pages_dir = settings.OUTPUTS_DIR / job_id / "pages"
         pages_dir.mkdir(parents=True, exist_ok=True)
         page_file = pages_dir / f"page_{pageno}.json"
-        
-        # Compact JSON serialization (no indent whitespace)
         page_file.write_text(json.dumps(page_data, ensure_ascii=False, separators=(',', ':')), encoding="utf-8")
         
         self._persist_session_meta(job_id)
@@ -81,7 +130,6 @@ class SessionService:
         return cached
 
     def is_valid_page(self, page_data: dict) -> bool:
-        """Check if a page result is a valid successful OCR page (not failed/stub)."""
         if not page_data or not isinstance(page_data, dict):
             return False
         text = page_data.get("text", "")
@@ -98,7 +146,6 @@ class SessionService:
         return valid
 
     def populate_queue_from_history(self, job_id: str):
-        """Populate event queue with all historical page_done and status events if queue is empty."""
         with self._lock:
             sess = self._sessions.get(job_id)
             if not sess:
@@ -139,7 +186,11 @@ class SessionService:
         
         copy_data = {
             "job_id": sess.get("job_id"),
+            "client_id": sess.get("client_id"),
+            "title": sess.get("title") or sess.get("telemetry", {}).get("title") or "Book",
+            "author": sess.get("author") or "Unknown",
             "status": sess.get("status"),
+            "is_paused": sess.get("is_paused", False),
             "pages_total": sess.get("pages_total"),
             "pages_done": len(sess.get("completed_pages", {})),
             "telemetry": sess.get("telemetry"),

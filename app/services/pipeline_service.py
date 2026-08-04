@@ -22,7 +22,13 @@ class PipelineService:
         if not session:
             return
 
-        telemetry = {"phases": [], "page_times": [], "image_count": 0}
+        telemetry = {
+            "title": metadata.get("title", "Book"),
+            "author": metadata.get("author", ""),
+            "phases": [],
+            "page_times": [],
+            "image_count": 0
+        }
 
         try:
             info = self.pdf_service.get_info(pdf_path)
@@ -33,11 +39,10 @@ class PipelineService:
                 "msg": f"PDF: {total} pages | Concurrency: {self.max_workers} workers"
             })
 
-            # Check valid cached pages on disk (filter out failed or missing pages)
+            # Check valid cached pages on disk
             valid_cached = session_manager.get_valid_cached_pages(job_id)
             pages_to_process = [i for i in range(total) if (i + 1) not in valid_cached]
 
-            # Re-emit valid page_done events for UI synchronization
             for pageno in sorted(valid_cached.keys()):
                 p_data = valid_cached[pageno]
                 session_manager.emit_event(job_id, "page_done", p_data)
@@ -45,50 +50,67 @@ class PipelineService:
             ocr_times = [p.get("time_sec", 0.0) for p in valid_cached.values()]
 
             if pages_to_process:
-                display_pages = [i + 1 for i in pages_to_process]
                 session_manager.emit_event(job_id, "progress", {
                     "phase": "ocr",
-                    "msg": f"Processing {len(pages_to_process)} uncompleted page(s) with {self.max_workers} parallel workers..."
+                    "msg": f"Processing {len(pages_to_process)} page(s) with {self.max_workers} parallel workers..."
                 })
 
-                # Instant worker dispatch: each worker renders its single page on demand (<15ms)
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                    futures = {
-                        executor.submit(self._process_single_page, job_id, pdf_path, i, total): (i + 1)
-                        for i in pages_to_process
-                    }
+                    futures = {}
+                    for i in pages_to_process:
+                        # Respect Pause control signal
+                        current_sess = session_manager.get_session(job_id)
+                        if current_sess and current_sess.get("status") == "paused":
+                            print(f"[pipeline] Processing paused for job {job_id}")
+                            session_manager.emit_event(job_id, "progress", {
+                                "phase": "paused", "msg": "⏸️ Job paused by user. Resume at any time."
+                            })
+                            return
+
+                        fut = executor.submit(self._process_single_page, job_id, pdf_path, i, total)
+                        futures[fut] = i + 1
 
                     for future in as_completed(futures):
                         pageno = futures[future]
+                        # Check pause status after each completed page
+                        current_sess = session_manager.get_session(job_id)
+                        if current_sess and current_sess.get("status") == "paused":
+                            print(f"[pipeline] Pausing job {job_id} after page {pageno}")
+                            return
+
                         try:
                             res = future.result()
-                            valid_cached[pageno] = res
-                            ocr_times.append(res.get("time_sec", 0.0))
-                            telemetry["image_count"] += res.get("crops", 0)
-                            telemetry["page_times"].append({
-                                "page": pageno,
-                                "sec": res.get("time_sec", 0.0),
-                                "render_sec": res.get("render_sec", 0.0),
-                                "images": res.get("images", 0)
-                            })
+                            if res:
+                                valid_cached[pageno] = res
+                                ocr_times.append(res.get("time_sec", 0.0))
+                                telemetry["image_count"] += res.get("crops", 0)
+                                telemetry["page_times"].append({
+                                    "page": pageno,
+                                    "sec": res.get("time_sec", 0.0),
+                                    "render_sec": res.get("render_sec", 0.0),
+                                    "images": res.get("images", 0)
+                                })
                         except Exception as exc:
-                            print(f"[pipeline error] Page {pageno} failed after retries: {exc}")
+                            print(f"[pipeline error] Page {pageno} failed: {exc}")
 
-            # Check for any remaining missing pages in 1..total range
+            # Check if paused mid-way
+            current_sess = session_manager.get_session(job_id)
+            if current_sess and current_sess.get("status") == "paused":
+                return
+
             still_missing = [p for p in range(1, total + 1) if p not in valid_cached]
 
             if still_missing:
                 session_manager.update_session(
                     job_id,
                     status="incomplete",
-                    error=f"Processing incomplete — {len(still_missing)} page(s) (e.g. Page {still_missing[:3]}) failed. Retry/Resume available."
+                    error=f"Processing incomplete — {len(still_missing)} page(s) missing or failed. Resume session to retry."
                 )
                 session_manager.emit_event(job_id, "error", {
-                    "msg": f"⚠️ Incomplete: {len(still_missing)} page(s) missing or failed (Pages: {still_missing}). Resume session to retry them."
+                    "msg": f"⚠️ Incomplete: {len(still_missing)} page(s) missing or failed. Resume session to retry."
                 })
                 return
 
-            # Finalize Markdown in strict numerical page order 1..N
             session_manager.emit_event(job_id, "progress", {"phase": "markdown", "msg": "Finalizing Markdown..."})
             t0 = time.time()
 
@@ -116,17 +138,6 @@ class PipelineService:
                 job_id, status="done", telemetry=telemetry, md_path=str(md_path)
             )
 
-            # Reclaim disk space: Delete source upload PDF immediately upon 100% completion
-            if settings.CLEANUP_UPLOAD_ON_COMPLETE:
-                try:
-                    p = Path(pdf_path)
-                    if p.exists():
-                        p.unlink()
-                        print(f"[pipeline cleanup] Deleted completed PDF source: {pdf_path}")
-                except Exception as cleanup_err:
-                    print(f"[pipeline cleanup warn] Failed to remove source PDF {pdf_path}: {cleanup_err}")
-
-            # Trigger explicit Python garbage collection after processing
             gc.collect()
 
             md_size = os.path.getsize(md_path) / 1024
@@ -147,6 +158,11 @@ class PipelineService:
         pix = None
         img_b64 = None
         try:
+            # Check pause status before performing heavy work
+            current_sess = session_manager.get_session(job_id)
+            if current_sess and current_sess.get("status") == "paused":
+                return {}
+
             # 1. Direct matrix rendering (<10ms)
             t_render = time.time()
             img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
@@ -158,6 +174,11 @@ class PipelineService:
             last_exc = None
 
             for attempt in range(max_attempts):
+                # Check pause status between retries
+                c_sess = session_manager.get_session(job_id)
+                if c_sess and c_sess.get("status") == "paused":
+                    return {}
+
                 try:
                     ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
                     break
@@ -199,7 +220,6 @@ class PipelineService:
             return page_data
 
         finally:
-            # Explicit cleanup of PyMuPDF C pixmap and memory buffers
             pix = None
             img_b64 = None
 

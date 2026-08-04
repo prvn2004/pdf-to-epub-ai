@@ -14,42 +14,50 @@ export class DropzoneComponent {
   }
 
   initEvents() {
-    this.dz.addEventListener('click', () => this.fileInput.click());
+    this.dz.addEventListener('click', e => {
+      if (e.target.tagName !== 'INPUT') {
+        this.fileInput.click();
+      }
+    });
     this.dz.addEventListener('dragover', e => { e.preventDefault(); this.dz.classList.add('drag'); });
     this.dz.addEventListener('dragleave', () => this.dz.classList.remove('drag'));
     this.dz.addEventListener('drop', e => {
       e.preventDefault();
       this.dz.classList.remove('drag');
-      if (e.dataTransfer.files.length) this.handleFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files.length) this.handleFiles(Array.from(e.dataTransfer.files));
     });
     this.fileInput.addEventListener('change', () => {
-      if (this.fileInput.files.length) this.handleFile(this.fileInput.files[0]);
+      if (this.fileInput.files.length) this.handleFiles(Array.from(this.fileInput.files));
     });
   }
 
-  async handleFile(file) {
-    if (!file.name.endsWith('.pdf')) return alert('Please select a PDF file.');
+  async handleFiles(files) {
+    const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    if (!pdfFiles.length) return alert('Please select valid PDF file(s).');
 
-    const title = this.metaTitle.value || file.name.replace(/\.pdf$/i, '');
-    const author = this.metaAuthor.value || 'Unknown';
+    const title = this.metaTitle ? this.metaTitle.value : '';
+    const author = this.metaAuthor ? this.metaAuthor.value : '';
 
     this.dz.classList.add('hidden');
     this.ws.classList.add('active');
-    store.set('progressMsg', 'Uploading...');
+    store.set('progressMsg', `Uploading ${pdfFiles.length} file(s)...`);
     store.set('isProcessing', true);
     store.set('startTime', Date.now());
 
     try {
-      const data = await ApiClient.uploadPdf(file, title, author);
-      store.set('jobId', data.job_id);
+      const data = await ApiClient.batchUpload(pdfFiles, title, author);
+      if (data.jobs && data.jobs.length > 0) {
+        const firstJob = data.jobs[0];
+        store.set('jobId', firstJob.job_id);
 
-      const info = await ApiClient.getPdfInfo(data.job_id);
-      store.set('totalPages', info.pages);
-      store.set('currentPage', 0);
+        const info = await ApiClient.getPdfInfo(firstJob.job_id);
+        store.set('totalPages', info.pages);
+        store.set('currentPage', 0);
 
-      sseManager.listen(data.job_id);
+        sseManager.listen(firstJob.job_id);
+      }
     } catch (err) {
-      alert(`Error starting processing: ${err.message}`);
+      alert(`Error starting batch upload: ${err.message}`);
       this.dz.classList.remove('hidden');
       this.ws.classList.remove('active');
     }

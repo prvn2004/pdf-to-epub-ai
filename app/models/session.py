@@ -23,7 +23,11 @@ class PageResult(BaseModel):
 
 class JobSession(BaseModel):
     job_id: str
-    status: str = "processing"  # processing, done, error
+    client_id: Optional[str] = None
+    title: str = "Book"
+    author: str = "Unknown"
+    status: str = "processing"  # processing, paused, done, incomplete, error
+    is_paused: bool = False
     pages_total: int = 0
     pages_done: int = 0
     telemetry: Telemetry = Field(default_factory=Telemetry)

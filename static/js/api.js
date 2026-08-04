@@ -10,6 +10,19 @@ export class ApiClient {
     return await resp.json();
   }
 
+  static async batchUpload(files, title, author) {
+    const form = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      form.append('files', files[i]);
+    }
+    form.append('title', title);
+    form.append('author', author);
+
+    const resp = await fetch('/api/batch/upload', { method: 'POST', body: form });
+    if (!resp.ok) throw new Error(`Batch upload failed: ${resp.statusText}`);
+    return await resp.json();
+  }
+
   static async getPdfInfo(jobId) {
     const resp = await fetch(`/api/pdf_info/${jobId}`);
     if (!resp.ok) throw new Error(`Failed to fetch PDF info: ${resp.statusText}`);
@@ -28,8 +41,8 @@ export class ApiClient {
     return await resp.json();
   }
 
-  static getDownloadUrl(jobId) {
-    return `/download/${jobId}`;
+  static getDownloadUrl(jobId, format = 'md') {
+    return `/download/${jobId}?format=${format}`;
   }
 
   static getPreviewUrl(jobId, pageIdx) {

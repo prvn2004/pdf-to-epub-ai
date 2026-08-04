@@ -18,22 +18,40 @@
 <!-- HEADER -->
 <header>
   <div class="logo">📖 Folio <span>PDF → Markdown & EPUB</span></div>
+
+  <div class="header-controls">
+    <button class="icon-btn" id="drawerToggleBtn" title="Job Drawer">
+      📁 Jobs <span class="badge" id="jobCountBadge" style="display:none">0</span>
+    </button>
+    <button class="icon-btn" id="themeToggleBtn" title="Toggle Dark/Light Mode">🌙</button>
+  </div>
+
   <div class="stats" id="headerStats" style="display:none">
     <span>Page <span class="val" id="statPage">—</span> / <span class="val" id="statTotal">—</span></span>
     <span><span class="val" id="statTime">0s</span> elapsed</span>
   </div>
 </header>
 
+<!-- JOB DRAWER SIDEBAR -->
+<div class="job-drawer" id="jobDrawer">
+  <div class="drawer-header">
+    <span>📚 Workspace Documents</span>
+  </div>
+  <div class="drawer-list" id="jobList">
+    <div class="drawer-empty">No active conversion jobs</div>
+  </div>
+</div>
+
 <!-- UPLOAD ZONE -->
 <div class="dropzone" id="dropzone">
   <div class="icon">📄</div>
-  <h2>Drop a PDF here</h2>
-  <p>or click to browse — we'll convert it to Markdown & EPUB in real-time</p>
+  <h2>Drop PDF file(s) here</h2>
+  <p>or click to browse — upload multiple PDFs for parallel conversion</p>
   <div class="meta-row">
     <input type="text" id="metaTitle" placeholder="Book title (optional)">
     <input type="text" id="metaAuthor" placeholder="Author (optional)">
   </div>
-  <input type="file" id="fileInput" accept=".pdf" hidden>
+  <input type="file" id="fileInput" accept=".pdf" multiple hidden>
 </div>
 
 <!-- WORKSPACE -->

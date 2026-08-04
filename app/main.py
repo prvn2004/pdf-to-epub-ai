@@ -6,6 +6,7 @@ from app.config import settings
 
 from app.api.routes.pages import router as pages_router
 from app.api.routes.upload import router as upload_router
+from app.api.routes.batch import router as batch_router
 from app.api.routes.stream import router as stream_router
 from app.api.routes.preview import router as preview_router
 from app.api.routes.assets import router as assets_router
@@ -13,7 +14,7 @@ from app.api.routes.session import router as session_router
 
 app = FastAPI(title="Folio — PDF to Markdown & EPUB")
 
-# GZip compression middleware (compresses text/JSON payloads > 1000 bytes)
+# GZip compression middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
@@ -30,6 +31,7 @@ if settings.STATIC_DIR.exists():
 # Register routers
 app.include_router(pages_router)
 app.include_router(upload_router)
+app.include_router(batch_router)
 app.include_router(stream_router)
 app.include_router(preview_router)
 app.include_router(assets_router)
