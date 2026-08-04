@@ -19,7 +19,7 @@ class Settings:
     )
     OPENCODE_MODEL: str = os.getenv("OPENCODE_MODEL", "qwen3.7-plus")
 
-    # Vision input cap (longest side). 1280px is optimal for vision LLM speed + crisp OCR accuracy.
+    # Vision input cap (longest side)
     MAX_IMAGE_SIDE: int = 1280
     MAX_CROP_SIDE: int = 1200
     JPEG_QUALITY: int = 72
@@ -29,6 +29,7 @@ class Settings:
     # Concurrency & Disk Settings
     MAX_CONCURRENT_WORKERS: int = int(os.getenv("MAX_CONCURRENT_WORKERS", "10"))
     CLEANUP_UPLOAD_ON_COMPLETE: bool = os.getenv("CLEANUP_UPLOAD_ON_COMPLETE", "true").lower() == "true"
+    PDF_RETENTION_SECONDS: int = int(os.getenv("PDF_RETENTION_SECONDS", "600"))  # 10 minutes retention
 
     def init_directories(self):
         self.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Folio — PDF to Markdown</title>
+<title>Folio — PDF to Markdown & EPUB</title>
 
 <!-- Modular Stylesheets -->
 <link rel="stylesheet" href="/static/css/variables.css">
@@ -17,7 +17,7 @@
 
 <!-- HEADER -->
 <header>
-  <div class="logo">📖 Folio <span>PDF → Markdown</span></div>
+  <div class="logo">📖 Folio <span>PDF → Markdown & EPUB</span></div>
   <div class="stats" id="headerStats" style="display:none">
     <span>Page <span class="val" id="statPage">—</span> / <span class="val" id="statTotal">—</span></span>
     <span><span class="val" id="statTime">0s</span> elapsed</span>
@@ -28,7 +28,7 @@
 <div class="dropzone" id="dropzone">
   <div class="icon">📄</div>
   <h2>Drop a PDF here</h2>
-  <p>or click to browse — we'll convert it to Markdown in real-time</p>
+  <p>or click to browse — we'll convert it to Markdown & EPUB in real-time</p>
   <div class="meta-row">
     <input type="text" id="metaTitle" placeholder="Book title (optional)">
     <input type="text" id="metaAuthor" placeholder="Author (optional)">
@@ -76,8 +76,14 @@
   <div class="row"><span class="label">Total</span><span class="value" id="telTotal">—</span></div>
 </div>
 
-<!-- DOWNLOAD BUTTON -->
-<button class="download-btn" id="downloadBtn">⬇ Download Markdown</button>
+<!-- DOWNLOAD BAR -->
+<div class="download-bar" id="downloadBar" style="display:none">
+  <div class="format-toggles">
+    <button class="fmt-btn active" id="fmtMd" data-fmt="md">Markdown (.md)</button>
+    <button class="fmt-btn" id="fmtEpub" data-fmt="epub">EPUB (.epub)</button>
+  </div>
+  <button class="download-btn" id="downloadBtn">⬇ Download Markdown</button>
+</div>
 
 </body>
 </html>

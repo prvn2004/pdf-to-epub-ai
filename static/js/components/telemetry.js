@@ -16,7 +16,12 @@ export class TelemetryComponent {
     this.telAvg = document.getElementById('telAvg');
     this.telTotal = document.getElementById('telTotal');
 
+    this.downloadBar = document.getElementById('downloadBar');
     this.downloadBtn = document.getElementById('downloadBtn');
+    this.fmtMd = document.getElementById('fmtMd');
+    this.fmtEpub = document.getElementById('fmtEpub');
+
+    this.currentFormat = 'md';
 
     this.initEvents();
   }
@@ -49,7 +54,11 @@ export class TelemetryComponent {
       this.telOcr.textContent = d.cumulative_sec.toFixed(0) + 's';
       this.telAvg.textContent = (d.cumulative_sec / d.pageno).toFixed(1) + 's';
 
-      // Auto-advance PDF preview if viewer is tracking current page
+      // Show download bar as soon as first page completes (allowing partial downloads)
+      if (this.downloadBar) {
+        this.downloadBar.style.display = 'flex';
+      }
+
       if (store.get('currentPage') === d.pageno - 1 && d.pageno < d.total) {
         store.set('currentPage', d.pageno);
       }
@@ -58,7 +67,9 @@ export class TelemetryComponent {
     store.addEventListener('change:isCompleted', () => {
       this.progressBar.style.width = '100%';
       this.progressText.textContent = '✅ Complete!';
-      this.downloadBtn.classList.add('show');
+      if (this.downloadBar) {
+        this.downloadBar.style.display = 'flex';
+      }
 
       const startTime = store.get('startTime');
       if (startTime) {
@@ -71,11 +82,32 @@ export class TelemetryComponent {
       }
     });
 
-    this.downloadBtn.addEventListener('click', () => {
-      const jobId = store.get('jobId');
-      if (jobId) {
-        window.open(`/download/${jobId}`, '_blank');
-      }
-    });
+    // Format toggles
+    if (this.fmtMd && this.fmtEpub) {
+      this.fmtMd.addEventListener('click', () => this.setFormat('md'));
+      this.fmtEpub.addEventListener('click', () => this.setFormat('epub'));
+    }
+
+    if (this.downloadBtn) {
+      this.downloadBtn.addEventListener('click', () => {
+        const jobId = store.get('jobId');
+        if (jobId) {
+          window.open(`/download/${jobId}?format=${this.currentFormat}`, '_blank');
+        }
+      });
+    }
+  }
+
+  setFormat(fmt) {
+    this.currentFormat = fmt;
+    if (fmt === 'md') {
+      this.fmtMd.classList.add('active');
+      this.fmtEpub.classList.remove('active');
+      this.downloadBtn.textContent = '⬇ Download Markdown (.md)';
+    } else {
+      this.fmtEpub.classList.add('active');
+      this.fmtMd.classList.remove('active');
+      this.downloadBtn.textContent = '⬇ Download EPUB (.epub)';
+    }
   }
 }
