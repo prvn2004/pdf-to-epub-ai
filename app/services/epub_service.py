@@ -248,6 +248,7 @@ figcaption { font-size: 0.85em; color: #666; margin-top: 0.4em; }"""
             if re.match(r'^<(h[1-6]|figure|pre|blockquote)', b):
                 paragraphs.append(b)
             else:
-                paragraphs.append(f"<p>{b.replace('\n', '<br/>')}</p>")
+                b_html = b.replace('\n', '<br/>')
+                paragraphs.append(f"<p>{b_html}</p>")
 
         return "\n".join(paragraphs), extracted_images
