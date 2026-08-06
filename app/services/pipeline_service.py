@@ -26,6 +26,7 @@ class PipelineService:
         if not session:
             return
 
+        job_start_time = time.time()
         telemetry = {
             "title": metadata.get("title", "Book"),
             "author": metadata.get("author", ""),
@@ -61,20 +62,18 @@ class PipelineService:
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = {}
                     for i in pages_to_process:
-                        current_sess = session_manager.get_session(job_id)
-                        if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
+                        if session_manager.is_paused(job_id):
                             session_manager.emit_event(job_id, "progress", {
                                 "phase": "paused", "msg": "⏸️ Job paused by user. Click Resume to continue."
                             })
                             return
 
-                        fut = executor.submit(self._process_single_page, job_id, pdf_path, i, total)
+                        fut = executor.submit(self._process_single_page, job_id, pdf_path, i, total, job_start_time)
                         futures[fut] = i + 1
 
                     for future in as_completed(futures):
                         pageno = futures[future]
-                        current_sess = session_manager.get_session(job_id)
-                        if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
+                        if session_manager.is_paused(job_id):
                             return
 
                         try:
@@ -92,8 +91,7 @@ class PipelineService:
                         except Exception as exc:
                             print(f"[pipeline error] Page {pageno} failed: {exc}")
 
-            current_sess = session_manager.get_session(job_id)
-            if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
+            if session_manager.is_paused(job_id):
                 return
 
             still_missing = [p for p in range(1, total + 1) if p not in valid_cached]
@@ -130,7 +128,7 @@ class PipelineService:
                 },
                 {"name": "markdown", "sec": round(md_time, 1)},
             ]
-            telemetry["total_sec"] = round(sum(p.get("sec", 0) for p in telemetry["page_times"]) + md_time, 1)
+            telemetry["total_sec"] = round(time.time() - job_start_time, 1)
 
             session_manager.update_session(
                 job_id, status="done", telemetry=telemetry, md_path=str(md_path)
@@ -159,16 +157,15 @@ class PipelineService:
             session_manager.update_session(job_id, status="error", error=str(e))
             session_manager.emit_event(job_id, "error", {"msg": str(e)})
 
-    def _process_single_page(self, job_id: str, pdf_path: str, page_idx: int, total: int, max_attempts: int = 5) -> dict:
+    def _process_single_page(self, job_id: str, pdf_path: str, page_idx: int, total: int, job_start_time: float, max_attempts: int = 2) -> dict:
         pageno = page_idx + 1
         pix = None
         img_b64 = None
 
-        # 1. Non-blocking C-level matrix rendering (<10ms) OUTSIDE LLM semaphore lock
-        current_sess = session_manager.get_session(job_id)
-        if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
+        if session_manager.is_paused(job_id):
             return {}
 
+        # 1. Non-blocking C-level matrix rendering (<10ms) OUTSIDE LLM semaphore lock
         t_render = time.time()
         img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
         render_time = time.time() - t_render
@@ -179,19 +176,18 @@ class PipelineService:
         last_exc = None
 
         for attempt in range(max_attempts):
-            c_sess = session_manager.get_session(job_id)
-            if c_sess and (c_sess.get("status") == "paused" or c_sess.get("is_paused")):
+            if session_manager.is_paused(job_id):
                 return {}
 
             try:
-                # Wrap ONLY the network request inside the semaphore lock so backoff sleeps occur outside lock
+                # Wrap ONLY the network request inside the semaphore lock
                 with GLOBAL_LLM_SEMAPHORE:
                     ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
                 break
             except Exception as e:
                 last_exc = e
                 if attempt + 1 < max_attempts:
-                    time.sleep(1.0 * (attempt + 1))
+                    time.sleep(1.0)
 
         if not ocr_res:
             raise RuntimeError(f"OCR failed for page {pageno} after {max_attempts} attempts: {last_exc}")
@@ -199,6 +195,7 @@ class PipelineService:
         md = ocr_res.markdown
         image_coords = ocr_res.images
         elapsed = time.time() - t0
+        cumulative_elapsed = time.time() - job_start_time
 
         # 3. Crop images locally OUTSIDE LLM semaphore lock
         crops = []
@@ -217,7 +214,7 @@ class PipelineService:
             "crops": len(crops),
             "render_sec": round(render_time, 2),
             "time_sec": round(elapsed, 1),
-            "cumulative_sec": round(elapsed, 1),
+            "cumulative_sec": round(cumulative_elapsed, 1),
         }
 
         session_manager.save_page_result(job_id, pageno, page_data)

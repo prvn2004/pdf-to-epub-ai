@@ -21,12 +21,12 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         adapter = HTTPAdapter(
             pool_connections=pool_size,
             pool_maxsize=pool_size,
-            max_retries=Retry(total=2, backoff_factor=0.5, status_forcelist=[502, 503, 504])
+            max_retries=Retry(total=1, backoff_factor=0.5, status_forcelist=[502, 503, 504])
         )
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
 
-    def ocr_page(self, image_b64: str, page_size: Tuple[int, int], attempts: int = 3) -> OCRResult:
+    def ocr_page(self, image_b64: str, page_size: Tuple[int, int], attempts: int = 2) -> OCRResult:
         if not self.api_key:
             raise RuntimeError("OPENCODE_API_KEY not set. Get one at https://opencode.ai/auth")
 
@@ -65,7 +65,8 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
         last_err = None
         for attempt in range(attempts):
             try:
-                resp = self.session.post(self.api_url, json=payload, headers=headers, timeout=180)
+                # 45s HTTP request timeout prevents server thread pool hangs under API latency spikes
+                resp = self.session.post(self.api_url, json=payload, headers=headers, timeout=45)
                 if resp.status_code == 200:
                     data = resp.json()
                     try:
@@ -104,7 +105,6 @@ class OpenCodeQwenClient(BaseVisionLLMClient):
                 last_err = f"API request failed: {e}"
 
             if attempt + 1 < attempts:
-                backoff = 1.5 ** attempt
-                time.sleep(backoff)
+                time.sleep(1.0)
 
         raise RuntimeError(last_err or "API: unknown failure")

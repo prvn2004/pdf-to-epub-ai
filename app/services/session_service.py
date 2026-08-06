@@ -8,7 +8,7 @@ from app.config import settings
 class SessionService:
     def __init__(self):
         self._sessions: Dict[str, Dict[str, Any]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Re-entrant lock to prevent recursive deadlocks
 
     def create_session(self, job_id: str, client_id: str = None, title: str = "Book", author: str = "Unknown") -> Dict[str, Any]:
         with self._lock:
@@ -29,8 +29,9 @@ class SessionService:
                 "error": None,
             }
             self._sessions[job_id] = session_data
-            self._persist_session_meta(job_id)
-            return session_data
+
+        self._persist_session_meta(job_id)
+        return session_data
 
     def get_session(self, job_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -39,6 +40,13 @@ class SessionService:
                 if loaded:
                     self._sessions[job_id] = loaded
             return self._sessions.get(job_id)
+
+    def is_paused(self, job_id: str) -> bool:
+        """Non-blocking check if a job has been paused or cancelled by user."""
+        sess = self.get_session(job_id)
+        if not sess:
+            return True
+        return sess.get("status") == "paused" or sess.get("is_paused", False)
 
     def get_client_sessions(self, client_id: str) -> List[Dict[str, Any]]:
         """Scan disk outputs and return all jobs belonging to client_id."""
@@ -77,10 +85,10 @@ class SessionService:
             if sess:
                 sess["status"] = "paused"
                 sess["is_paused"] = True
-                self._persist_session_meta(job_id)
-                self.emit_event(job_id, "progress", {"phase": "paused", "msg": "⏸️ Job paused by user"})
-                return True
-        return False
+
+        self._persist_session_meta(job_id)
+        self.emit_event(job_id, "progress", {"phase": "paused", "msg": "⏸️ Job paused by user"})
+        return True
 
     def delete_session(self, job_id: str) -> bool:
         """Purge session data, outputs, crops, and upload files from server disk."""
@@ -104,7 +112,8 @@ class SessionService:
             sess = self._sessions.get(job_id)
             if sess:
                 sess.update(kwargs)
-                self._persist_session_meta(job_id)
+
+        self._persist_session_meta(job_id)
 
     def save_page_result(self, job_id: str, pageno: int, page_data: dict):
         with self._lock:
@@ -113,6 +122,7 @@ class SessionService:
                 sess["completed_pages"][pageno] = page_data
                 sess["pages_done"] = len(sess["completed_pages"])
 
+        # Disk write performed outside self._lock to prevent worker thread lock contention
         pages_dir = settings.OUTPUTS_DIR / job_id / "pages"
         pages_dir.mkdir(parents=True, exist_ok=True)
         page_file = pages_dir / f"page_{pageno}.json"
@@ -121,6 +131,11 @@ class SessionService:
         self._persist_session_meta(job_id)
 
     def load_cached_pages(self, job_id: str) -> Dict[int, dict]:
+        with self._lock:
+            sess = self._sessions.get(job_id)
+            if sess and sess.get("completed_pages"):
+                return dict(sess["completed_pages"])
+
         pages_dir = settings.OUTPUTS_DIR / job_id / "pages"
         if not pages_dir.exists():
             return {}
@@ -183,27 +198,28 @@ class SessionService:
                 sess["queue"] = queue
 
     def _persist_session_meta(self, job_id: str):
-        sess = self._sessions.get(job_id)
-        if not sess:
-            return
-        
+        with self._lock:
+            sess = self._sessions.get(job_id)
+            if not sess:
+                return
+            copy_data = {
+                "job_id": sess.get("job_id"),
+                "client_id": sess.get("client_id"),
+                "title": sess.get("title") or sess.get("telemetry", {}).get("title") or "Book",
+                "author": sess.get("author") or "Unknown",
+                "status": sess.get("status"),
+                "is_paused": sess.get("is_paused", False),
+                "pages_total": sess.get("pages_total"),
+                "pages_done": len(sess.get("completed_pages", {})),
+                "telemetry": sess.get("telemetry"),
+                "md_path": sess.get("md_path"),
+                "error": sess.get("error"),
+            }
+
+        # Disk write performed outside self._lock
         meta_dir = settings.OUTPUTS_DIR / job_id
         meta_dir.mkdir(parents=True, exist_ok=True)
         meta_file = meta_dir / "session.json"
-        
-        copy_data = {
-            "job_id": sess.get("job_id"),
-            "client_id": sess.get("client_id"),
-            "title": sess.get("title") or sess.get("telemetry", {}).get("title") or "Book",
-            "author": sess.get("author") or "Unknown",
-            "status": sess.get("status"),
-            "is_paused": sess.get("is_paused", False),
-            "pages_total": sess.get("pages_total"),
-            "pages_done": len(sess.get("completed_pages", {})),
-            "telemetry": sess.get("telemetry"),
-            "md_path": sess.get("md_path"),
-            "error": sess.get("error"),
-        }
         meta_file.write_text(json.dumps(copy_data, separators=(',', ':')), encoding="utf-8")
 
     def _load_session_from_disk(self, job_id: str) -> Optional[Dict[str, Any]]:
