@@ -1,19 +1,32 @@
+import secrets
 import re
-import uuid
 from pathlib import Path
-from fastapi import Request, HTTPException, UploadFile
+from fastapi import Request, HTTPException, Response, UploadFile
 
 # Maximum allowed file size per upload (200 MB)
 MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024
 
 class SecurityService:
     @staticmethod
-    def get_client_session_id(request: Request) -> str:
-        """Extract or generate a client session ID for workspace isolation."""
-        client_id = request.headers.get("X-Client-Session-ID") or request.cookies.get("folio_client_id")
-        if not client_id or len(client_id) > 64:
-            client_id = uuid.uuid4().hex
-        return client_id
+    def generate_secure_job_token() -> str:
+        """Generate a 24-character cryptographically unguessable job token."""
+        return secrets.token_urlsafe(18)
+
+    @staticmethod
+    def get_or_create_client_token(request: Request, response: Response = None) -> str:
+        """Extract or issue a client session authorization token."""
+        token = request.headers.get("X-Client-Token") or request.cookies.get("folio_client_token")
+        if not token or len(token) > 64:
+            token = secrets.token_urlsafe(24)
+            if response:
+                response.set_cookie(
+                    key="folio_client_token",
+                    value=token,
+                    max_age=30 * 24 * 3600,
+                    httponly=True,
+                    samesite="lax"
+                )
+        return token
 
     @staticmethod
     def sanitize_filename(filename: str) -> str:

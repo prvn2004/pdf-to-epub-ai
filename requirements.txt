@@ -5,3 +5,5 @@ pymupdf
 pillow
 requests
 python-multipart
+pytest
+httpx

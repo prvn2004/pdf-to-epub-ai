@@ -1,8 +1,10 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.config import settings
+from app.services.ttl_service import ttl_service
 
 from app.api.routes.pages import router as pages_router
 from app.api.routes.upload import router as upload_router
@@ -12,7 +14,13 @@ from app.api.routes.preview import router as preview_router
 from app.api.routes.assets import router as assets_router
 from app.api.routes.session import router as session_router
 
-app = FastAPI(title="Folio — PDF to Markdown & EPUB")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start background TTL storage reclamation daemon on startup
+    ttl_service.start_background_cleanup()
+    yield
+
+app = FastAPI(title="Folio — PDF to Markdown & EPUB", lifespan=lifespan)
 
 # GZip compression middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)

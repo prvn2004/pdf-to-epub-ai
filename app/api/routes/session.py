@@ -1,6 +1,7 @@
 import threading
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, HTTPException
 from app.config import settings
+from app.core.security import security_service
 from app.services.session_service import session_manager
 from app.services.pipeline_service import PipelineService
 
@@ -8,10 +9,14 @@ router = APIRouter(prefix="/api")
 pipeline = PipelineService()
 
 @router.get("/session/{job_id}")
-async def get_session_info(job_id: str):
+async def get_session_info(request: Request, job_id: str):
+    client_token = security_service.get_or_create_client_token(request)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to job session")
+
     sess = session_manager.get_session(job_id)
     if not sess:
-        return {"error": "Session not found"}
+        raise HTTPException(status_code=404, detail="Session not found")
     
     valid_pages = session_manager.get_valid_cached_pages(job_id)
     total = sess.get("pages_total", 0)
@@ -29,14 +34,18 @@ async def get_session_info(job_id: str):
     }
 
 @router.post("/resume/{job_id}")
-async def resume_session(job_id: str):
+async def resume_session(request: Request, job_id: str):
+    client_token = security_service.get_or_create_client_token(request)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to resume job")
+
     sess = session_manager.get_session(job_id)
     if not sess:
-        return {"error": "Session not found"}
+        raise HTTPException(status_code=404, detail="Session not found")
 
     pdf_path = settings.UPLOADS_DIR / f"{job_id}.pdf"
     if not pdf_path.exists():
-        return {"error": "Original PDF file not found to resume"}
+        raise HTTPException(status_code=400, detail="Original PDF file not found to resume")
 
     current_status = sess.get("status")
     valid_pages = session_manager.get_valid_cached_pages(job_id)
@@ -51,8 +60,8 @@ async def resume_session(job_id: str):
 
     session_manager.update_session(job_id, status="processing")
     metadata = {
-        "title": "Resumed Book",
-        "author": "Unknown",
+        "title": sess.get("title") or "Resumed Book",
+        "author": sess.get("author") or "Unknown",
     }
 
     thread = threading.Thread(

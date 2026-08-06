@@ -1,7 +1,8 @@
 from pathlib import Path
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from app.config import settings
+from app.core.security import security_service
 from app.services.session_service import session_manager
 from app.services.epub_service import EPUBService
 from app.services.cleanup_service import cleanup_service
@@ -11,19 +12,24 @@ epub_service = EPUBService()
 
 @router.get("/download/{job_id}")
 async def download_file(
+    request: Request,
     job_id: str,
     format: str = Query("md", pattern="^(md|epub)$")
 ):
+    client_token = security_service.get_or_create_client_token(request)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to job resource")
+
     # Trigger background 10-minute PDF retention cleanup
     cleanup_service.cleanup_expired_pdf_uploads()
 
     sess = session_manager.get_session(job_id)
     if not sess:
-        return {"error": "Job session not found"}
+        raise HTTPException(status_code=404, detail="Job session not found")
 
     valid_pages = session_manager.get_valid_cached_pages(job_id)
     if not valid_pages:
-        return {"error": "No completed pages available for download yet"}
+        raise HTTPException(status_code=400, detail="No completed pages available for download yet")
 
     is_done = sess.get("status") == "done"
     out_dir = settings.OUTPUTS_DIR / job_id
@@ -38,7 +44,7 @@ async def download_file(
                 filename=epub_path.name
             )
         except Exception as e:
-            return {"error": f"Failed to generate EPUB: {str(e)}"}
+            raise HTTPException(status_code=500, detail=f"Failed to generate EPUB: {str(e)}")
 
     # Format == "md"
     mds = list(out_dir.glob("*.md")) if is_done else []
@@ -62,12 +68,18 @@ async def download_file(
     )
 
 @router.get("/crops/{job_id}/{filename}")
-async def serve_crop(job_id: str, filename: str):
+async def serve_crop(request: Request, job_id: str, filename: str):
+    client_token = security_service.get_or_create_client_token(request)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to crop resource")
+
     crop_dir = (settings.CROPS_DIR / job_id).resolve()
     fpath = (crop_dir / filename).resolve()
     
-    if not fpath.is_relative_to(settings.CROPS_DIR) or not fpath.exists():
-        return {"error": "Crop not found"}
+    # Strict boundary check against the target job directory to prevent cross-job leaks
+    if not fpath.is_relative_to(crop_dir) or not fpath.exists():
+        raise HTTPException(status_code=404, detail="Crop not found")
+
     return FileResponse(
         fpath,
         media_type="image/jpeg",
@@ -75,8 +87,12 @@ async def serve_crop(job_id: str, filename: str):
     )
 
 @router.get("/api/telemetry/{job_id}")
-async def get_telemetry(job_id: str):
+async def get_telemetry(request: Request, job_id: str):
+    client_token = security_service.get_or_create_client_token(request)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to telemetry")
+
     sess = session_manager.get_session(job_id)
     if not sess:
-        return {"error": "Job not found"}
+        raise HTTPException(status_code=404, detail="Job not found")
     return sess.get("telemetry", {})

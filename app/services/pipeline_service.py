@@ -2,6 +2,7 @@ import os
 import gc
 import time
 import re
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List
@@ -10,6 +11,9 @@ from app.services.pdf_service import PDFService
 from app.services.ocr_service import OCRService
 from app.services.image_service import ImageService
 from app.services.session_service import session_manager
+
+# Global Bounded Semaphore to cap total concurrent LLM requests across all users (max 20)
+GLOBAL_LLM_SEMAPHORE = threading.BoundedSemaphore(value=20)
 
 class PipelineService:
     def __init__(self, pdf_service: PDFService = None, ocr_service: OCRService = None, max_workers: int = None):
@@ -36,10 +40,9 @@ class PipelineService:
             session_manager.update_session(job_id, pages_total=total, status="processing")
             session_manager.emit_event(job_id, "progress", {
                 "phase": "opening",
-                "msg": f"PDF: {total} pages | Concurrency: {self.max_workers} workers"
+                "msg": f"PDF: {total} pages | Workers: {self.max_workers}"
             })
 
-            # Check valid cached pages on disk
             valid_cached = session_manager.get_valid_cached_pages(job_id)
             pages_to_process = [i for i in range(total) if (i + 1) not in valid_cached]
 
@@ -52,18 +55,16 @@ class PipelineService:
             if pages_to_process:
                 session_manager.emit_event(job_id, "progress", {
                     "phase": "ocr",
-                    "msg": f"Processing {len(pages_to_process)} page(s) with {self.max_workers} parallel workers..."
+                    "msg": f"Processing {len(pages_to_process)} page(s)..."
                 })
 
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = {}
                     for i in pages_to_process:
-                        # Respect Pause control signal
                         current_sess = session_manager.get_session(job_id)
                         if current_sess and current_sess.get("status") == "paused":
-                            print(f"[pipeline] Processing paused for job {job_id}")
                             session_manager.emit_event(job_id, "progress", {
-                                "phase": "paused", "msg": "⏸️ Job paused by user. Resume at any time."
+                                "phase": "paused", "msg": "⏸️ Job paused by user. Click Resume to continue."
                             })
                             return
 
@@ -72,10 +73,8 @@ class PipelineService:
 
                     for future in as_completed(futures):
                         pageno = futures[future]
-                        # Check pause status after each completed page
                         current_sess = session_manager.get_session(job_id)
                         if current_sess and current_sess.get("status") == "paused":
-                            print(f"[pipeline] Pausing job {job_id} after page {pageno}")
                             return
 
                         try:
@@ -93,7 +92,6 @@ class PipelineService:
                         except Exception as exc:
                             print(f"[pipeline error] Page {pageno} failed: {exc}")
 
-            # Check if paused mid-way
             current_sess = session_manager.get_session(job_id)
             if current_sess and current_sess.get("status") == "paused":
                 return
@@ -104,14 +102,14 @@ class PipelineService:
                 session_manager.update_session(
                     job_id,
                     status="incomplete",
-                    error=f"Processing incomplete — {len(still_missing)} page(s) missing or failed. Resume session to retry."
+                    error=f"Processing incomplete — {len(still_missing)} page(s) missing or failed. Click Resume to retry."
                 )
                 session_manager.emit_event(job_id, "error", {
-                    "msg": f"⚠️ Incomplete: {len(still_missing)} page(s) missing or failed. Resume session to retry."
+                    "msg": f"⚠️ Incomplete: {len(still_missing)} page(s) missing or failed. Click Resume to retry."
                 })
                 return
 
-            session_manager.emit_event(job_id, "progress", {"phase": "markdown", "msg": "Finalizing Markdown..."})
+            session_manager.emit_event(job_id, "progress", {"phase": "markdown", "msg": "Finalizing document..."})
             t0 = time.time()
 
             sorted_md_parts = []
@@ -138,6 +136,15 @@ class PipelineService:
                 job_id, status="done", telemetry=telemetry, md_path=str(md_path)
             )
 
+            # Reclaim source upload PDF immediately on 100% completion
+            if settings.CLEANUP_UPLOAD_ON_COMPLETE:
+                try:
+                    p = Path(pdf_path)
+                    if p.exists():
+                        p.unlink()
+                except Exception as cleanup_err:
+                    print(f"[pipeline cleanup warn] {cleanup_err}")
+
             gc.collect()
 
             md_size = os.path.getsize(md_path) / 1024
@@ -154,74 +161,74 @@ class PipelineService:
 
     def _process_single_page(self, job_id: str, pdf_path: str, page_idx: int, total: int, max_attempts: int = 5) -> dict:
         pageno = page_idx + 1
-
         pix = None
         img_b64 = None
-        try:
-            # Check pause status before performing heavy work
-            current_sess = session_manager.get_session(job_id)
-            if current_sess and current_sess.get("status") == "paused":
-                return {}
 
-            # 1. Direct matrix rendering (<10ms)
-            t_render = time.time()
-            img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
-            render_time = time.time() - t_render
-
-            # 2. Vision LLM OCR
-            t0 = time.time()
-            ocr_res = None
-            last_exc = None
-
-            for attempt in range(max_attempts):
-                # Check pause status between retries
-                c_sess = session_manager.get_session(job_id)
-                if c_sess and c_sess.get("status") == "paused":
+        # Acquire global rate-limiting semaphore
+        with GLOBAL_LLM_SEMAPHORE:
+            try:
+                current_sess = session_manager.get_session(job_id)
+                if current_sess and current_sess.get("status") == "paused":
                     return {}
 
-                try:
-                    ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
-                    break
-                except Exception as e:
-                    last_exc = e
-                    if attempt + 1 < max_attempts:
-                        time.sleep(1.0 * (attempt + 1))
+                # 1. Direct matrix rendering (<10ms)
+                t_render = time.time()
+                img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
+                render_time = time.time() - t_render
 
-            if not ocr_res:
-                raise RuntimeError(f"OCR failed for page {pageno} after {max_attempts} attempts: {last_exc}")
+                # 2. Vision LLM OCR
+                t0 = time.time()
+                ocr_res = None
+                last_exc = None
 
-            md = ocr_res.markdown
-            image_coords = ocr_res.images
-            elapsed = time.time() - t0
+                for attempt in range(max_attempts):
+                    c_sess = session_manager.get_session(job_id)
+                    if c_sess and c_sess.get("status") == "paused":
+                        return {}
 
-            # 3. Crop images locally
-            crops = []
-            if image_coords:
-                crops = ImageService.crop_images(job_id, pageno, pix, image_coords)
-                for idx, c in enumerate(crops):
-                    cap = c.caption or f"Page {pageno} figure {idx + 1}"
-                    md += f'\n\n![{cap}]({c.rel_path})\n'
+                    try:
+                        ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        if attempt + 1 < max_attempts:
+                            time.sleep(1.0 * (attempt + 1))
 
-            md = md.strip()
-            page_data = {
-                "pageno": pageno,
-                "total": total,
-                "text": md,
-                "images": len(image_coords),
-                "crops": len(crops),
-                "render_sec": round(render_time, 2),
-                "time_sec": round(elapsed, 1),
-                "cumulative_sec": round(elapsed, 1),
-            }
+                if not ocr_res:
+                    raise RuntimeError(f"OCR failed for page {pageno} after {max_attempts} attempts: {last_exc}")
 
-            session_manager.save_page_result(job_id, pageno, page_data)
-            session_manager.emit_event(job_id, "page_done", page_data)
+                md = ocr_res.markdown
+                image_coords = ocr_res.images
+                elapsed = time.time() - t0
 
-            return page_data
+                # 3. Crop images locally
+                crops = []
+                if image_coords:
+                    crops = ImageService.crop_images(job_id, pageno, pix, image_coords)
+                    for idx, c in enumerate(crops):
+                        cap = c.caption or f"Page {pageno} figure {idx + 1}"
+                        md += f'\n\n![{cap}]({c.rel_path})\n'
 
-        finally:
-            pix = None
-            img_b64 = None
+                md = md.strip()
+                page_data = {
+                    "pageno": pageno,
+                    "total": total,
+                    "text": md,
+                    "images": len(image_coords),
+                    "crops": len(crops),
+                    "render_sec": round(render_time, 2),
+                    "time_sec": round(elapsed, 1),
+                    "cumulative_sec": round(elapsed, 1),
+                }
+
+                session_manager.save_page_result(job_id, pageno, page_data)
+                session_manager.emit_event(job_id, "page_done", page_data)
+
+                return page_data
+
+            finally:
+                pix = None
+                img_b64 = None
 
     def _finalize_markdown(self, job_id: str, md_parts: list, metadata: dict) -> Path:
         out_dir = settings.OUTPUTS_DIR / job_id

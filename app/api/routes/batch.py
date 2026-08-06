@@ -1,6 +1,5 @@
-import uuid
 from typing import List
-from fastapi import APIRouter, Request, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Request, Response, UploadFile, File, Form, BackgroundTasks, HTTPException
 from app.config import settings
 from app.core.security import security_service
 from app.services.session_service import session_manager
@@ -11,6 +10,7 @@ router = APIRouter()
 @router.post("/api/batch/upload")
 async def batch_upload(
     request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     title: str = Form(""),
@@ -20,7 +20,7 @@ async def batch_upload(
     Accept multiple PDF file uploads simultaneously.
     Validates each file and initializes background conversion pipelines.
     """
-    client_id = security_service.get_client_session_id(request)
+    client_id = security_service.get_or_create_client_token(request, response)
     created_jobs = []
 
     if not files:
@@ -30,7 +30,7 @@ async def batch_upload(
 
     for idx, file in enumerate(files):
         content = await security_service.validate_pdf_upload(file)
-        job_id = uuid.uuid4().hex[:12]
+        job_id = security_service.generate_secure_job_token()
 
         pdf_path = settings.UPLOADS_DIR / f"{job_id}.pdf"
         pdf_path.write_bytes(content)
@@ -59,23 +59,31 @@ async def batch_upload(
     }
 
 @router.get("/api/jobs")
-async def list_jobs(request: Request):
+async def list_jobs(request: Request, response: Response):
     """List all jobs belonging to the current client session."""
-    client_id = security_service.get_client_session_id(request)
+    client_id = security_service.get_or_create_client_token(request, response)
     jobs = session_manager.get_client_sessions(client_id)
     return {"status": "ok", "client_id": client_id, "jobs": jobs}
 
 @router.post("/api/pause/{job_id}")
-async def pause_job(job_id: str):
+async def pause_job(request: Request, response: Response, job_id: str):
     """Pause an actively running conversion job."""
+    client_token = security_service.get_or_create_client_token(request, response)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to job control")
+
     success = session_manager.pause_session(job_id)
     if not success:
         raise HTTPException(status_code=404, detail="Job not found or already completed")
     return {"status": "ok", "job_id": job_id, "state": "paused"}
 
 @router.post("/api/resume/{job_id}")
-async def resume_job(job_id: str, background_tasks: BackgroundTasks):
+async def resume_job(request: Request, response: Response, job_id: str, background_tasks: BackgroundTasks):
     """Resume a paused or incomplete conversion job."""
+    client_token = security_service.get_or_create_client_token(request, response)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to job control")
+
     sess = session_manager.get_session(job_id)
     if not sess:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -100,7 +108,11 @@ async def resume_job(job_id: str, background_tasks: BackgroundTasks):
     return {"status": "ok", "job_id": job_id, "state": "resuming"}
 
 @router.delete("/api/job/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job(request: Request, response: Response, job_id: str):
     """Cancel job and purge session files from disk."""
+    client_token = security_service.get_or_create_client_token(request, response)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to delete job")
+
     success = session_manager.delete_session(job_id)
     return {"status": "ok", "job_id": job_id, "deleted": success}

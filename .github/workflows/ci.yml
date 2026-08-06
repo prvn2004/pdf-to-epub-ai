@@ -26,3 +26,7 @@ jobs:
     - name: Verify application import
       run: |
         python -c "import app.main; print('App package initialized successfully')"
+
+    - name: Run pytest unit test suite
+      run: |
+        python -m pytest tests/

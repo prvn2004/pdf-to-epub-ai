@@ -50,7 +50,7 @@ class SessionService:
             if meta_dir.is_dir():
                 job_id = meta_dir.name
                 sess = self.get_session(job_id)
-                if sess and (not client_id or sess.get("client_id") == client_id or not sess.get("client_id")):
+                if sess and self.verify_job_owner(job_id, client_id):
                     valid_pages = self.get_valid_cached_pages(job_id)
                     jobs.append({
                         "job_id": job_id,
@@ -62,6 +62,14 @@ class SessionService:
                         "error": sess.get("error"),
                     })
         return sorted(jobs, key=lambda x: x["job_id"], reverse=True)
+
+    def verify_job_owner(self, job_id: str, client_token: str) -> bool:
+        """Verify that the requesting client token strictly matches session client_id."""
+        sess = self.get_session(job_id)
+        if not sess:
+            return False
+        owner_id = sess.get("client_id")
+        return bool(owner_id and client_token and owner_id == client_token)
 
     def pause_session(self, job_id: str) -> bool:
         with self._lock:
@@ -80,7 +88,6 @@ class SessionService:
             if job_id in self._sessions:
                 del self._sessions[job_id]
 
-        # Purge files
         (settings.UPLOADS_DIR / f"{job_id}.pdf").unlink(missing_ok=True)
         shutil.rmtree(settings.OUTPUTS_DIR / job_id, ignore_errors=True)
         shutil.rmtree(settings.CROPS_DIR / job_id, ignore_errors=True)
@@ -170,7 +177,7 @@ class SessionService:
                     }})
                 elif status in ("error", "incomplete"):
                     queue.append({"event": "error", "data": {
-                        "msg": sess.get("error") or "Processing incomplete — some pages require retry."
+                        "msg": sess.get("error") or "Processing incomplete — click Resume to retry missing pages."
                     }})
 
                 sess["queue"] = queue

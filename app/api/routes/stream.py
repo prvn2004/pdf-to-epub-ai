@@ -1,13 +1,18 @@
 import json
 import asyncio
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
+from app.core.security import security_service
 from app.services.session_service import session_manager
 
 router = APIRouter(prefix="/api")
 
 @router.get("/stream/{job_id}")
-async def stream_job_events(job_id: str):
+async def stream_job_events(request: Request, job_id: str):
+    client_token = security_service.get_or_create_client_token(request)
+    if not session_manager.verify_job_owner(job_id, client_token):
+        raise HTTPException(status_code=403, detail="Unauthorized access to job stream")
+
     sess = session_manager.get_session(job_id)
     if not sess:
         async def err():
@@ -29,7 +34,6 @@ async def stream_job_events(job_id: str):
                 if evt["event"] in ("done", "error"):
                     done_sent = True
             if done_sent or sess.get("status") in ("done", "error"):
-                # If all events in queue sent and job is finished, exit stream cleanly
                 if last_idx >= len(queue):
                     break
             await asyncio.sleep(0.2)

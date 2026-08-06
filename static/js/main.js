@@ -1,61 +1,235 @@
-import { store } from './state.js';
+import { ThemeManager } from './utils/theme.js';
 import { ApiClient } from './api.js';
 import { sseManager } from './sse.js';
-import { ThemeManager } from './utils/theme.js';
-import { DrawerComponent } from './components/drawer.js';
-import { DropzoneComponent } from './components/dropzone.js';
-import { PdfViewerComponent } from './components/pdf-viewer.js';
-import { ReaderComponent } from './components/reader.js';
-import { TelemetryComponent } from './components/telemetry.js';
+import { store } from './state.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
   new ThemeManager();
-  new DrawerComponent();
-  new DropzoneComponent();
-  new PdfViewerComponent();
-  new ReaderComponent();
-  new TelemetryComponent();
 
-  // Check URL hash for job ID switching (e.g. #job_id)
-  const hashJobId = window.location.hash ? window.location.hash.substring(1) : null;
-  const savedJobId = hashJobId || store.get('jobId');
+  // DOM Elements
+  const uploadCard = document.getElementById('uploadCard');
+  const fileInput = document.getElementById('fileInput');
+  const metaTitle = document.getElementById('metaTitle');
+  const metaAuthor = document.getElementById('metaAuthor');
 
-  if (savedJobId) {
+  const progressCard = document.getElementById('progressCard');
+  const docTitle = document.getElementById('docTitle');
+  const pctBadge = document.getElementById('pctBadge');
+  const progressBar = document.getElementById('progressBar');
+  const progressText = document.getElementById('progressText');
+  const btnPause = document.getElementById('btnPause');
+  const btnResume = document.getElementById('btnResume');
+  const btnCancel = document.getElementById('btnCancel');
+
+  const telPages = document.getElementById('telPages');
+  const telAvg = document.getElementById('telAvg');
+  const telTime = document.getElementById('telTime');
+
+  const downloadCard = document.getElementById('downloadCard');
+  const fmtMd = document.getElementById('fmtMd');
+  const fmtEpub = document.getElementById('fmtEpub');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  let currentFormat = 'md';
+
+  // 1. Check URL query parameter for ?job=SECRET_TOKEN
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlJobId = urlParams.get('job') || store.get('jobId');
+
+  if (urlJobId) {
     try {
-      const sess = await ApiClient.getSession(savedJobId);
+      const sess = await ApiClient.getSession(urlJobId);
       if (sess && !sess.error) {
-        console.log('Restoring session:', savedJobId, sess);
-
-        const dz = document.getElementById('dropzone');
-        const ws = document.getElementById('workspace');
-        dz.classList.add('hidden');
-        ws.classList.add('active');
-
-        store.set('jobId', savedJobId);
-        store.set('totalPages', sess.pages_total || 0);
-        store.set('currentPage', 0);
-
-        if (sess.completed_pages) {
-          store.restorePages(sess.completed_pages);
-        }
-
-        const missing = sess.missing_pages || [];
-        if (sess.status === 'done' && missing.length === 0) {
-          store.set('isCompleted', true);
-          store.set('progressMsg', '✅ Completed');
-        } else if (sess.status === 'paused') {
-          store.set('progressMsg', '⏸️ Job Paused');
-        } else {
-          store.set('isProcessing', true);
-          store.set('progressMsg', 'Connected to conversion stream...');
-          sseManager.listen(savedJobId);
-        }
+        attachToJob(urlJobId, sess);
       } else {
-        store.clearJob();
+        resetToUpload();
       }
-    } catch (err) {
-      console.warn('Could not restore session:', err);
-      store.clearJob();
+    } catch (e) {
+      console.warn('Job recovery failed:', e);
+      resetToUpload();
     }
   }
+
+  // 2. Dropzone events
+  uploadCard.addEventListener('click', e => {
+    if (e.target.tagName !== 'INPUT') fileInput.click();
+  });
+  uploadCard.addEventListener('dragover', e => { e.preventDefault(); uploadCard.classList.add('drag'); });
+  uploadCard.addEventListener('dragleave', () => uploadCard.classList.remove('drag'));
+  uploadCard.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadCard.classList.remove('drag');
+    if (e.dataTransfer.files.length) handleFileUpload(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFileUpload(fileInput.files[0]);
+  });
+
+  // 3. Upload File Handler
+  async function handleFileUpload(file) {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      return alert('Please select a valid PDF file.');
+    }
+
+    const title = metaTitle.value || file.name.replace(/\.pdf$/i, '');
+    const author = metaAuthor.value || 'Unknown';
+
+    uploadCard.style.display = 'none';
+    progressCard.style.display = 'flex';
+    docTitle.textContent = title;
+    progressText.textContent = 'Uploading document...';
+    progressBar.style.width = '0%';
+    pctBadge.textContent = '0%';
+    store.set('startTime', Date.now());
+
+    try {
+      const data = await ApiClient.uploadPdf(file, title, author);
+      const jobId = data.job_id;
+      
+      // Update URL query parameter
+      window.history.pushState({}, '', `/?job=${jobId}`);
+      store.set('jobId', jobId);
+
+      connectToStream(jobId);
+    } catch (err) {
+      alert(`Upload failed: ${err.message}`);
+      resetToUpload();
+    }
+  }
+
+  function attachToJob(jobId, sess) {
+    store.set('jobId', jobId);
+    window.history.pushState({}, '', `/?job=${jobId}`);
+
+    uploadCard.style.display = 'none';
+    progressCard.style.display = 'flex';
+    docTitle.textContent = sess.title || 'Book';
+
+    const total = sess.pages_total || 0;
+    const done = sess.pages_done || 0;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    progressBar.style.width = `${pct}%`;
+    pctBadge.textContent = `${pct}%`;
+    telPages.textContent = `${done} / ${total}`;
+
+    if (done > 0) {
+      downloadCard.style.display = 'flex';
+    }
+
+    if (sess.status === 'done') {
+      progressText.textContent = '✅ Conversion Complete!';
+      btnPause.style.display = 'none';
+      btnResume.style.display = 'none';
+      downloadCard.style.display = 'flex';
+    } else if (sess.status === 'paused') {
+      progressText.textContent = '⏸️ Processing Paused';
+      btnPause.style.display = 'none';
+      btnResume.style.display = 'inline-block';
+    } else {
+      btnPause.style.display = 'inline-block';
+      btnResume.style.display = 'none';
+      connectToStream(jobId);
+    }
+  }
+
+  function connectToStream(jobId) {
+    sseManager.listen(jobId);
+
+    store.addEventListener('change:progressMsg', e => {
+      progressText.textContent = e.detail;
+    });
+
+    store.addEventListener('change:latestPageDone', e => {
+      const d = e.detail;
+      const pct = Math.round((d.pageno / d.total) * 100);
+      progressBar.style.width = `${pct}%`;
+      pctBadge.textContent = `${pct}%`;
+
+      progressText.textContent = `Page ${d.pageno} of ${d.total} (${pct}%) — ⚡ Download available anytime!`;
+      telPages.textContent = `${d.pageno} / ${d.total}`;
+      telAvg.textContent = `${(d.cumulative_sec / d.pageno).toFixed(1)}s`;
+      telTime.textContent = `${Math.round(d.cumulative_sec)}s`;
+
+      downloadCard.style.display = 'flex';
+      btnPause.style.display = 'inline-block';
+      btnResume.style.display = 'none';
+    });
+
+    store.addEventListener('change:isCompleted', () => {
+      progressBar.style.width = '100%';
+      pctBadge.textContent = '100%';
+      progressText.textContent = '✅ Conversion Complete! Download files below.';
+      btnPause.style.display = 'none';
+      btnResume.style.display = 'none';
+      downloadCard.style.display = 'flex';
+
+      const startTime = store.get('startTime');
+      if (startTime) {
+        telTime.textContent = `${Math.round((Date.now() - startTime) / 1000)}s`;
+      }
+    });
+  }
+
+  function resetToUpload() {
+    store.clearJob();
+    sseManager.close();
+    window.history.pushState({}, '', '/');
+    
+    uploadCard.style.display = 'flex';
+    progressCard.style.display = 'none';
+    downloadCard.style.display = 'none';
+    fileInput.value = '';
+  }
+
+  // Control Buttons
+  btnPause.addEventListener('click', async () => {
+    const jobId = store.get('jobId');
+    if (jobId) {
+      await fetch(`/api/pause/${jobId}`, { method: 'POST' });
+      btnPause.style.display = 'none';
+      btnResume.style.display = 'inline-block';
+      progressText.textContent = '⏸️ Conversion Paused';
+    }
+  });
+
+  btnResume.addEventListener('click', async () => {
+    const jobId = store.get('jobId');
+    if (jobId) {
+      await fetch(`/api/resume/${jobId}`, { method: 'POST' });
+      btnResume.style.display = 'none';
+      btnPause.style.display = 'inline-block';
+      connectToStream(jobId);
+    }
+  });
+
+  btnCancel.addEventListener('click', () => {
+    if (confirm('Start new conversion? Your current file can still be accessed via its URL link.')) {
+      resetToUpload();
+    }
+  });
+
+  // Format Toggles & Download Button
+  fmtMd.addEventListener('click', () => setFormat('md'));
+  fmtEpub.addEventListener('click', () => setFormat('epub'));
+
+  function setFormat(fmt) {
+    currentFormat = fmt;
+    if (fmt === 'md') {
+      fmtMd.classList.add('active');
+      fmtEpub.classList.remove('active');
+      downloadBtn.textContent = '⬇ Download Markdown (.md)';
+    } else {
+      fmtEpub.classList.add('active');
+      fmtMd.classList.remove('active');
+      downloadBtn.textContent = '⬇ Download EPUB (.epub)';
+    }
+  }
+
+  downloadBtn.addEventListener('click', () => {
+    const jobId = store.get('jobId');
+    if (jobId) {
+      window.open(`/download/${jobId}?format=${currentFormat}`, '_blank');
+    }
+  });
 });
