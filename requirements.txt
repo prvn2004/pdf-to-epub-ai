@@ -6,4 +6,5 @@ pillow
 requests
 python-multipart
 pytest
+pytest-asyncio
 httpx
