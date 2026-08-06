@@ -12,7 +12,7 @@ from app.services.ocr_service import OCRService
 from app.services.image_service import ImageService
 from app.services.session_service import session_manager
 
-# Global Bounded Semaphore to cap total concurrent LLM requests across all users (max 20)
+# Global Bounded Semaphore to cap total concurrent LLM HTTP requests across all users (max 20)
 GLOBAL_LLM_SEMAPHORE = threading.BoundedSemaphore(value=20)
 
 class PipelineService:
@@ -55,14 +55,14 @@ class PipelineService:
             if pages_to_process:
                 session_manager.emit_event(job_id, "progress", {
                     "phase": "ocr",
-                    "msg": f"Processing {len(pages_to_process)} page(s)..."
+                    "msg": f"Processing {len(valid_cached)} of {total} pages completed..."
                 })
 
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = {}
                     for i in pages_to_process:
                         current_sess = session_manager.get_session(job_id)
-                        if current_sess and current_sess.get("status") == "paused":
+                        if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
                             session_manager.emit_event(job_id, "progress", {
                                 "phase": "paused", "msg": "⏸️ Job paused by user. Click Resume to continue."
                             })
@@ -74,7 +74,7 @@ class PipelineService:
                     for future in as_completed(futures):
                         pageno = futures[future]
                         current_sess = session_manager.get_session(job_id)
-                        if current_sess and current_sess.get("status") == "paused":
+                        if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
                             return
 
                         try:
@@ -93,7 +93,7 @@ class PipelineService:
                             print(f"[pipeline error] Page {pageno} failed: {exc}")
 
             current_sess = session_manager.get_session(job_id)
-            if current_sess and current_sess.get("status") == "paused":
+            if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
                 return
 
             still_missing = [p for p in range(1, total + 1) if p not in valid_cached]
@@ -164,71 +164,67 @@ class PipelineService:
         pix = None
         img_b64 = None
 
-        # Acquire global rate-limiting semaphore
+        # 1. Non-blocking C-level matrix rendering (<10ms) OUTSIDE LLM semaphore lock
+        current_sess = session_manager.get_session(job_id)
+        if current_sess and (current_sess.get("status") == "paused" or current_sess.get("is_paused")):
+            return {}
+
+        t_render = time.time()
+        img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
+        render_time = time.time() - t_render
+
+        # 2. Acquire global rate-limiting semaphore ONLY during Vision LLM HTTP request
+        t0 = time.time()
+        ocr_res = None
+        last_exc = None
+
         with GLOBAL_LLM_SEMAPHORE:
-            try:
-                current_sess = session_manager.get_session(job_id)
-                if current_sess and current_sess.get("status") == "paused":
+            for attempt in range(max_attempts):
+                c_sess = session_manager.get_session(job_id)
+                if c_sess and (c_sess.get("status") == "paused" or c_sess.get("is_paused")):
                     return {}
 
-                # 1. Direct matrix rendering (<10ms)
-                t_render = time.time()
-                img_b64, page_size, scale, pix = self.pdf_service.render_page_for_ocr(pdf_path, page_idx)
-                render_time = time.time() - t_render
+                try:
+                    ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
+                    break
+                except Exception as e:
+                    last_exc = e
+                    if attempt + 1 < max_attempts:
+                        time.sleep(1.0 * (attempt + 1))
 
-                # 2. Vision LLM OCR
-                t0 = time.time()
-                ocr_res = None
-                last_exc = None
+        if not ocr_res:
+            raise RuntimeError(f"OCR failed for page {pageno} after {max_attempts} attempts: {last_exc}")
 
-                for attempt in range(max_attempts):
-                    c_sess = session_manager.get_session(job_id)
-                    if c_sess and c_sess.get("status") == "paused":
-                        return {}
+        md = ocr_res.markdown
+        image_coords = ocr_res.images
+        elapsed = time.time() - t0
 
-                    try:
-                        ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
-                        break
-                    except Exception as e:
-                        last_exc = e
-                        if attempt + 1 < max_attempts:
-                            time.sleep(1.0 * (attempt + 1))
+        # 3. Crop images locally OUTSIDE LLM semaphore lock
+        crops = []
+        if image_coords:
+            crops = ImageService.crop_images(job_id, pageno, pix, image_coords)
+            for idx, c in enumerate(crops):
+                cap = c.caption or f"Page {pageno} figure {idx + 1}"
+                md += f'\n\n![{cap}]({c.rel_path})\n'
 
-                if not ocr_res:
-                    raise RuntimeError(f"OCR failed for page {pageno} after {max_attempts} attempts: {last_exc}")
+        md = md.strip()
+        page_data = {
+            "pageno": pageno,
+            "total": total,
+            "text": md,
+            "images": len(image_coords),
+            "crops": len(crops),
+            "render_sec": round(render_time, 2),
+            "time_sec": round(elapsed, 1),
+            "cumulative_sec": round(elapsed, 1),
+        }
 
-                md = ocr_res.markdown
-                image_coords = ocr_res.images
-                elapsed = time.time() - t0
+        session_manager.save_page_result(job_id, pageno, page_data)
+        session_manager.emit_event(job_id, "page_done", page_data)
 
-                # 3. Crop images locally
-                crops = []
-                if image_coords:
-                    crops = ImageService.crop_images(job_id, pageno, pix, image_coords)
-                    for idx, c in enumerate(crops):
-                        cap = c.caption or f"Page {pageno} figure {idx + 1}"
-                        md += f'\n\n![{cap}]({c.rel_path})\n'
-
-                md = md.strip()
-                page_data = {
-                    "pageno": pageno,
-                    "total": total,
-                    "text": md,
-                    "images": len(image_coords),
-                    "crops": len(crops),
-                    "render_sec": round(render_time, 2),
-                    "time_sec": round(elapsed, 1),
-                    "cumulative_sec": round(elapsed, 1),
-                }
-
-                session_manager.save_page_result(job_id, pageno, page_data)
-                session_manager.emit_event(job_id, "page_done", page_data)
-
-                return page_data
-
-            finally:
-                pix = None
-                img_b64 = None
+        pix = None
+        img_b64 = None
+        return page_data
 
     def _finalize_markdown(self, job_id: str, md_parts: list, metadata: dict) -> Path:
         out_dir = settings.OUTPUTS_DIR / job_id

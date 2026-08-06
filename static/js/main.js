@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const downloadBtn = document.getElementById('downloadBtn');
 
   let currentFormat = 'md';
+  let processedPagesCount = 0;
 
   // 1. Check URL query parameter for ?job=SECRET_TOKEN
   const urlParams = new URLSearchParams(window.location.search);
@@ -80,6 +81,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     progressText.textContent = 'Uploading document...';
     progressBar.style.width = '0%';
     pctBadge.textContent = '0%';
+    processedPagesCount = 0;
     store.set('startTime', Date.now());
 
     try {
@@ -106,14 +108,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     docTitle.textContent = sess.title || 'Book';
 
     const total = sess.pages_total || 0;
-    const done = sess.pages_done || 0;
-    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    processedPagesCount = sess.pages_done || 0;
+    const pct = total > 0 ? Math.round((processedPagesCount / total) * 100) : 0;
 
     progressBar.style.width = `${pct}%`;
     pctBadge.textContent = `${pct}%`;
-    telPages.textContent = `${done} / ${total}`;
+    telPages.textContent = `${processedPagesCount} / ${total}`;
 
-    if (done > 0) {
+    if (processedPagesCount > 0) {
       downloadCard.style.display = 'flex';
     }
 
@@ -142,13 +144,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     store.addEventListener('change:latestPageDone', e => {
       const d = e.detail;
-      const pct = Math.round((d.pageno / d.total) * 100);
+      processedPagesCount += 1;
+      const count = Math.min(processedPagesCount, d.total);
+      const pct = Math.round((count / d.total) * 100);
+      
       progressBar.style.width = `${pct}%`;
       pctBadge.textContent = `${pct}%`;
 
-      progressText.textContent = `Page ${d.pageno} of ${d.total} (${pct}%) — ⚡ Download available anytime!`;
-      telPages.textContent = `${d.pageno} / ${d.total}`;
-      telAvg.textContent = `${(d.cumulative_sec / d.pageno).toFixed(1)}s`;
+      progressText.textContent = `${count} of ${d.total} pages processed (${pct}%) — ⚡ Download available anytime!`;
+      telPages.textContent = `${count} / ${d.total}`;
+      telAvg.textContent = count > 0 ? `${(d.cumulative_sec / count).toFixed(1)}s` : '—';
       telTime.textContent = `${Math.round(d.cumulative_sec)}s`;
 
       downloadCard.style.display = 'flex';
@@ -180,6 +185,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     progressCard.style.display = 'none';
     downloadCard.style.display = 'none';
     fileInput.value = '';
+    processedPagesCount = 0;
   }
 
   // Control Buttons

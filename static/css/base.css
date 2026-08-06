@@ -8,10 +8,11 @@ body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -23,4 +24,4 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #ccc; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }

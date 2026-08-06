@@ -4,8 +4,8 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 32px;
-  background: rgba(255,255,255,0.85);
+  padding: 0 24px;
+  background: rgba(251, 247, 240, 0.88);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
@@ -13,7 +13,7 @@ header {
 }
 
 html[data-theme="dark"] header {
-  background: rgba(28,28,30,0.85);
+  background: rgba(28, 25, 23, 0.88);
 }
 
 .logo {
@@ -48,10 +48,10 @@ html[data-theme="dark"] header {
 
 /* Main Container Layout */
 .app-container {
-  max-width: 640px;
+  max-width: 600px;
   width: 100%;
-  margin: 48px auto;
-  padding: 0 20px;
+  margin: 36px auto;
+  padding: 0 16px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -62,7 +62,7 @@ html[data-theme="dark"] header {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 32px;
+  padding: 28px;
   box-shadow: var(--shadow);
   transition: all var(--transition);
 }
@@ -80,18 +80,18 @@ html[data-theme="dark"] header {
   border-color: var(--accent);
   background: var(--accent-dim);
 }
-.dropzone-card .icon { font-size: 52px; margin-bottom: 12px; opacity: 0.5; }
+.dropzone-card .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.8; color: var(--accent); }
 .dropzone-card h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
 .dropzone-card p { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; }
 
 .meta-row {
-  display: flex; gap: 12px; margin-top: 8px; width: 100%; max-width: 420px;
+  display: flex; gap: 10px; margin-top: 8px; width: 100%; max-width: 420px;
 }
 .meta-row input {
   flex: 1;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 10px 12px;
   font-size: 13px;
   font-family: var(--font);
   background: var(--bg);
@@ -118,7 +118,7 @@ html[data-theme="dark"] header {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 440px;
+  max-width: 400px;
 }
 .pct-badge {
   background: var(--accent-dim);
@@ -130,9 +130,9 @@ html[data-theme="dark"] header {
 }
 
 .progress-wrap {
-  height: 8px;
+  height: 10px;
   background: var(--border);
-  border-radius: 4px;
+  border-radius: 5px;
   overflow: hidden;
 }
 .progress-bar {
@@ -145,26 +145,28 @@ html[data-theme="dark"] header {
 .progress-status {
   font-size: 13px;
   color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .controls-row {
   display: flex;
   gap: 10px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .btn {
   border: none;
   border-radius: 10px;
-  padding: 8px 16px;
+  padding: 10px 18px;
   font-size: 13px;
   font-family: var(--font);
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: all var(--transition);
 }
 .btn-primary { background: var(--accent); color: white; }
-.btn-primary:hover { background: #0077ed; }
+.btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { background: var(--accent-dim); color: var(--accent); }
 .btn-secondary:hover { background: var(--border); }
 .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
@@ -194,7 +196,8 @@ html[data-theme="dark"] header {
   display: flex;
   background: var(--bg);
   border-radius: 16px;
-  padding: 3px;
+  padding: 4px;
+  border: 1px solid var(--border);
 }
 .fmt-btn {
   border: none;
@@ -203,14 +206,14 @@ html[data-theme="dark"] header {
   font-size: 13px;
   font-weight: 500;
   padding: 6px 16px;
-  border-radius: 14px;
+  border-radius: 12px;
   cursor: pointer;
   transition: all var(--transition);
 }
 .fmt-btn.active {
   background: var(--surface);
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
@@ -219,4 +222,41 @@ html[data-theme="dark"] header {
   max-width: 320px;
   padding: 12px 24px;
   font-size: 15px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile Responsive Adjustments
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  header {
+    padding: 0 16px;
+    height: 50px;
+  }
+  .app-container {
+    margin: 20px auto;
+    padding: 0 12px;
+    gap: 16px;
+  }
+  .card {
+    padding: 20px;
+    border-radius: 14px;
+  }
+  .meta-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card-header h3 {
+    max-width: 220px;
+    font-size: 15px;
+  }
+  .controls-row {
+    flex-direction: column;
+  }
+  .controls-row .btn {
+    width: 100%;
+  }
+  .stats-row {
+    flex-direction: column;
+    gap: 6px;
+  }
 }
