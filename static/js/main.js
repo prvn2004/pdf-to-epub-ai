@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const downloadBtn = document.getElementById('downloadBtn');
 
   let currentFormat = 'md';
-  let processedPagesCount = 0;
+  const completedPagesSet = new Set();
 
   // 1. Check URL query parameter for ?job=SECRET_TOKEN
   const urlParams = new URLSearchParams(window.location.search);
@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     progressText.textContent = 'Uploading document...';
     progressBar.style.width = '0%';
     pctBadge.textContent = '0%';
-    processedPagesCount = 0;
+    completedPagesSet.clear();
     store.set('startTime', Date.now());
 
     try {
@@ -108,14 +108,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     docTitle.textContent = sess.title || 'Book';
 
     const total = sess.pages_total || 0;
-    processedPagesCount = sess.pages_done || 0;
-    const pct = total > 0 ? Math.round((processedPagesCount / total) * 100) : 0;
+    completedPagesSet.clear();
+    if (sess.completed_pages) {
+      Object.keys(sess.completed_pages).forEach(p => completedPagesSet.add(parseInt(p, 10)));
+    }
+    const count = completedPagesSet.size;
+    const pct = total > 0 ? Math.round((count / total) * 100) : 0;
 
     progressBar.style.width = `${pct}%`;
     pctBadge.textContent = `${pct}%`;
-    telPages.textContent = `${processedPagesCount} / ${total}`;
+    telPages.textContent = `${count} / ${total}`;
 
-    if (processedPagesCount > 0) {
+    if (count > 0) {
       downloadCard.style.display = 'flex';
     }
 
@@ -144,8 +148,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     store.addEventListener('change:latestPageDone', e => {
       const d = e.detail;
-      processedPagesCount += 1;
-      const count = Math.min(processedPagesCount, d.total);
+      if (d.pageno) {
+        completedPagesSet.add(d.pageno);
+      }
+      const count = Math.min(completedPagesSet.size, d.total);
       const pct = Math.round((count / d.total) * 100);
       
       progressBar.style.width = `${pct}%`;
@@ -185,7 +191,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     progressCard.style.display = 'none';
     downloadCard.style.display = 'none';
     fileInput.value = '';
-    processedPagesCount = 0;
+    completedPagesSet.clear();
   }
 
   // Control Buttons

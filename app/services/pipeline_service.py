@@ -178,19 +178,20 @@ class PipelineService:
         ocr_res = None
         last_exc = None
 
-        with GLOBAL_LLM_SEMAPHORE:
-            for attempt in range(max_attempts):
-                c_sess = session_manager.get_session(job_id)
-                if c_sess and (c_sess.get("status") == "paused" or c_sess.get("is_paused")):
-                    return {}
+        for attempt in range(max_attempts):
+            c_sess = session_manager.get_session(job_id)
+            if c_sess and (c_sess.get("status") == "paused" or c_sess.get("is_paused")):
+                return {}
 
-                try:
+            try:
+                # Wrap ONLY the network request inside the semaphore lock so backoff sleeps occur outside lock
+                with GLOBAL_LLM_SEMAPHORE:
                     ocr_res = self.ocr_service.process_page(img_b64, page_size, scale)
-                    break
-                except Exception as e:
-                    last_exc = e
-                    if attempt + 1 < max_attempts:
-                        time.sleep(1.0 * (attempt + 1))
+                break
+            except Exception as e:
+                last_exc = e
+                if attempt + 1 < max_attempts:
+                    time.sleep(1.0 * (attempt + 1))
 
         if not ocr_res:
             raise RuntimeError(f"OCR failed for page {pageno} after {max_attempts} attempts: {last_exc}")
